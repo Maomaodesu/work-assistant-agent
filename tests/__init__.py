@@ -1,0 +1,1 @@
+"""Work Assistant automated tests."""

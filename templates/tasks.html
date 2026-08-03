@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>任务列表 - Work Assistant Agent</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <span class="nav-brand">⚙ Work Assistant Agent</span>
+    <div class="nav-links">
+      <a href="/" class="nav-link">对话</a>
+      <a href="/workspace" class="nav-link">项目与工作项</a>
+      <a href="/tasks" class="nav-link active">旧任务</a>
+      <a href="/settings" class="nav-link">设置</a>
+    </div>
+  </nav>
+
+  <div class="tasks-layout">
+    <div class="tasks-header">
+      <h2>任务列表</h2>
+      <a href="/" class="btn-new">+ 新建任务</a>
+    </div>
+
+    {% if tasks %}
+    <div class="task-grid">
+      {% for task in tasks %}
+      <div class="task-card" id="card-{{ task.task_id }}">
+        <div class="task-card-header">
+          <span class="task-id">{{ task.task_id }}</span>
+          <span class="task-status status-{{ task.status }}">{{ task.status }}</span>
+        </div>
+        <h3 class="task-name">{{ task.task_name }}</h3>
+        <p class="task-goal">{{ task.goal[:100] }}{% if task.goal|length > 100 %}...{% endif %}</p>
+
+        <!-- 进度条 -->
+        <div class="task-progress-row">
+          <div class="task-progress-bar">
+            <div class="task-progress-fill" style="width: {{ task.completion_percent }}%"></div>
+          </div>
+          <span class="task-progress-pct">{{ task.completion_percent }}%</span>
+        </div>
+
+        <!-- 步骤列表 -->
+        <div class="task-steps">
+          {% for step in task.plan %}
+          <div class="step-item step-{{ step.status }}">
+            {% if step.status == 'completed' %}✓
+            {% elif step.status == 'in_progress' %}→
+            {% else %}○{% endif %}
+            {{ step.step_name }}
+          </div>
+          {% endfor %}
+        </div>
+
+        <!-- 元信息 -->
+        <div class="task-meta">
+          <span>优先级：{{ task.priority }}</span>
+          <span>中断 {{ task.interrupt_count }} 次</span>
+          <span>{{ task.last_active_at[:10] }}</span>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="task-actions">
+          <button class="btn-progress" onclick="refreshProgress('{{ task.task_id }}')">
+            刷新进度
+          </button>
+          <a href="/?task={{ task.task_id }}" class="btn-chat">继续对话</a>
+        </div>
+
+        <!-- 进度报告展示区（点击刷新后显示） -->
+        <div class="progress-report-area" id="report-{{ task.task_id }}" style="display:none"></div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <p>还没有任务。</p>
+      <a href="/" class="btn-new">去新建一个</a>
+    </div>
+    {% endif %}
+  </div>
+
+  <script>
+    function refreshProgress(taskId) {
+      const reportArea = document.getElementById("report-" + taskId);
+      const card = document.getElementById("card-" + taskId);
+      reportArea.style.display = "block";
+      reportArea.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span> 采集快照中...</div>';
+
+      fetch("/api/tasks/" + taskId + "/progress").then(response => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        function read() {
+          reader.read().then(({ done, value }) => {
+            if (done) return;
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop();
+
+            parts.forEach(part => {
+              const eventMatch = part.match(/^event: (.+)/m);
+              const dataLines = part.match(/^data: (.*)$/gm) || [];
+              const eventType = eventMatch ? eventMatch[1].trim() : "";
+              const data = dataLines.map(l => l.replace(/^data: /, "")).join("\n");
+
+              if (eventType === "thinking") {
+                reportArea.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span> ' + data + '</div>';
+              } else if (eventType === "report") {
+                try {
+                  const rpt = JSON.parse(data);
+                  renderReport(taskId, rpt, card);
+                } catch(e) {
+                  reportArea.innerHTML = '<p style="color:#e74c3c">解析报告失败</p>';
+                }
+              } else if (eventType === "error") {
+                reportArea.innerHTML = '<p style="color:#e74c3c">错误：' + data + '</p>';
+              }
+            });
+            read();
+          });
+        }
+        read();
+      });
+    }
+
+    function renderReport(taskId, rpt, card) {
+      const pct = rpt.completion_percent || 0;
+      const bar = "█".repeat(Math.floor(pct / 5)) + "░".repeat(20 - Math.floor(pct / 5));
+
+      // 更新卡片进度条
+      const fill = card.querySelector(".task-progress-fill");
+      const pctEl = card.querySelector(".task-progress-pct");
+      if (fill) fill.style.width = pct + "%";
+      if (pctEl) pctEl.textContent = pct + "%";
+
+      // 更新步骤状态
+      const stepEls = card.querySelectorAll(".step-item");
+      const statuses = rpt.step_statuses || [];
+      stepEls.forEach((el, i) => {
+        const s = statuses[i];
+        if (!s) return;
+        el.className = "step-item step-" + s.status;
+        const icon = s.status === "completed" ? "✓" : s.status === "in_progress" ? "→" : "○";
+        el.textContent = icon + " " + s.step_name;
+      });
+
+      const reportArea = document.getElementById("report-" + taskId);
+      let html = '<div class="report-box">';
+      html += '<div class="report-bar">[' + bar + '] ' + pct + '%</div>';
+      if (rpt.summary) html += '<p class="report-summary">' + rpt.summary + '</p>';
+      if (rpt.next_action) html += '<p class="report-next">→ 下一步：' + rpt.next_action + '</p>';
+      if (rpt.risks && rpt.risks.length) {
+        html += '<div class="report-risks">';
+        rpt.risks.forEach(r => { html += '<p class="risk-item">! ' + r + '</p>'; });
+        html += '</div>';
+      }
+      html += '</div>';
+      reportArea.innerHTML = html;
+    }
+  </script>
+</body>
+</html>

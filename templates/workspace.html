@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工作台 - Work Assistant</title>
+  <link rel="stylesheet" href="/static/style.css?v=workspace-source-review-20260802">
+</head>
+<body class="home-page">
+  <nav class="navbar">
+    <span class="nav-brand">⚙ Work Assistant Agent</span>
+    <div class="nav-links">
+      <a href="/" class="nav-link active">工作台</a>
+      <a href="/conversations" class="nav-link">会话</a>
+      <a href="/settings" class="nav-link">设置</a>
+    </div>
+    <div class="nav-actions">
+      <button id="topbarSyncButton" class="topbar-sync" type="button" onclick="syncAllConversations()">↻ 同步</button>
+      <a id="topbarAMDStatus" class="topbar-amd-status" href="/settings#amdSettings" title="查看或修改 AMD 连接配置"><i class="topbar-status-dot"></i><span>AMD 检测中</span></a>
+    </div>
+  </nav>
+
+  <div class="workspace-layout">
+    <aside class="workspace-projects-panel">
+      <div class="workspace-panel-heading">
+        <div>
+          <span class="workspace-kicker">WORKSPACE</span>
+          <h2>项目</h2>
+        </div>
+        <button class="workspace-icon-button" type="button" onclick="openModal('projectModal')" title="添加项目">＋</button>
+      </div>
+      <div id="workspaceProjectList" class="workspace-project-list">
+        <p class="conversation-loading">正在加载项目…</p>
+      </div>
+      <div class="workspace-panel-note">一个项目可以包含多个代码目录</div>
+    </aside>
+
+    <main class="workspace-main">
+      <section id="workspaceEmpty" class="workspace-empty">
+        <div class="workspace-empty-icon">◇</div>
+        <h1>建立你的第一个项目</h1>
+        <p>项目是长期工作空间；Feature、Bug 和重构等具体目标会作为项目下的工作项管理。</p>
+        <button class="send-btn" type="button" onclick="openModal('projectModal')">添加项目</button>
+      </section>
+
+      <section id="workspaceProjectDetail" class="workspace-project-detail" hidden>
+        <header class="workspace-detail-header">
+          <div>
+            <span class="workspace-kicker">PROJECT</span>
+            <h1 id="projectTitle"></h1>
+            <p id="projectDescription"></p>
+            <div id="projectConversationSummary" class="workspace-conversation-summary" aria-label="关联会话概览"></div>
+          </div>
+          <div class="workspace-project-actions">
+            <div class="workspace-project-open-menu">
+              <button id="projectOpenMenuButton" class="btn-secondary" type="button" aria-expanded="false" aria-controls="projectOpenMenu" onclick="toggleProjectOpenMenu()">打开项目 <span aria-hidden="true">⌄</span></button>
+              <div id="projectOpenMenu" class="workspace-project-open-options" hidden>
+                <button type="button" onclick="launchWorkspaceProject('explorer')">在资源管理器中显示</button>
+                <button type="button" onclick="launchWorkspaceProject('terminal')">在终端中打开</button>
+                <button type="button" onclick="launchWorkspaceProject('default_editor')">用默认编辑器打开</button>
+              </div>
+            </div>
+            <button class="send-btn" onclick="openWorkItemModal()">新建工作项</button>
+          </div>
+        </header>
+
+        <div class="workspace-summary-grid">
+          <div class="workspace-summary-card"><strong id="summaryActive">0</strong><span>进行与待办</span></div>
+          <div class="workspace-summary-card suggested"><strong id="summarySuggested">0</strong><span>待确认</span></div>
+          <div class="workspace-summary-card completed"><strong id="summaryCompleted">0</strong><span>已完成</span></div>
+          <div class="workspace-summary-card muted"><strong id="summaryIgnored">0</strong><span>已忽略</span></div>
+        </div>
+
+        <section class="workspace-analysis-card">
+          <div class="workspace-analysis-heading">
+            <div>
+              <span class="workspace-kicker">CONVERSATION ANALYSIS</span>
+              <h3>会话工作项发现</h3>
+              <p>后台增量分析 Claude/Codex 会话；已经成功分析的历史片段不会重复请求 AMD。</p>
+            </div>
+            <button id="startAnalysisButton" class="send-btn" type="button" onclick="startAnalysis()">开始增量分析</button>
+          </div>
+          <div id="analysisRunEmpty" class="workspace-analysis-empty">这个项目还没有分析记录。</div>
+          <div id="analysisRunDetail" hidden>
+            <div class="workspace-analysis-status-row">
+              <span id="analysisStatusBadge" class="workspace-analysis-badge"></span>
+              <div class="workspace-analysis-status-copy"><strong id="analysisStage"></strong><small id="analysisProgressHint"></small></div>
+              <details class="workspace-analysis-technical">
+                <summary>技术详情</summary>
+                <div><code id="analysisRunId"></code><button type="button" onclick="copyAnalysisRunId()">复制 ID</button></div>
+                <p id="analysisTechnicalStats"></p>
+              </details>
+            </div>
+            <div class="workspace-analysis-progress"><span><i id="analysisProgressBar"></i></span><em id="analysisProgressText">0%</em></div>
+            <div id="analysisStats" class="workspace-analysis-stats"></div>
+            <p id="analysisError" class="workspace-analysis-error" hidden></p>
+            <div id="analysisActions" class="workspace-analysis-actions"></div>
+          </div>
+        </section>
+
+        <section class="workspace-roots-section">
+          <div class="workspace-roots-heading">
+            <div>
+              <h3>Agent 项目目录</h3>
+              <p>每行一个本机目录。第一行作为打开项目和写入交接文件的位置，其余目录同样会提供给 Agent。</p>
+            </div>
+            <div class="workspace-roots-actions">
+              <button type="button" class="btn-secondary" onclick="copyProjectDirectories()">复制全部</button>
+              <button type="button" class="send-btn" onclick="saveProjectDirectories()">保存目录</button>
+            </div>
+          </div>
+          <textarea id="projectRoots" class="workspace-root-editor" rows="4" spellcheck="false" aria-label="Agent 项目目录，每行一个目录"></textarea>
+        </section>
+
+        <section class="workspace-items-section">
+          <div class="workspace-items-heading">
+            <div>
+              <span class="workspace-kicker">WORK ITEMS</span>
+              <h2>工作项</h2>
+            </div>
+            <div class="workspace-tabs" id="workItemTabs">
+              <button class="active" data-filter="formal">进行中的工作项</button>
+              <button data-filter="suggested">待确认 <em id="suggestedTabCount">0</em></button>
+              <button data-filter="ignored">已忽略</button>
+              <button data-filter="completed">已完成</button>
+              <button data-filter="project_discussions">项目级讨论</button>
+            </div>
+          </div>
+          <div id="mergeToolbar" class="workspace-merge-toolbar" hidden>
+            <span>已选择 <strong id="mergeSelectedCount">0</strong> 个待确认工作项</span>
+            <button class="btn-secondary" type="button" onclick="openMergeModal()">合并选中项</button>
+          </div>
+          <div id="workItemList" class="workspace-item-list"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div id="projectModal" class="workspace-modal" hidden>
+    <form class="workspace-modal-card" onsubmit="createProject(event)">
+      <div class="workspace-modal-heading"><h2>添加项目</h2><button type="button" onclick="closeModal('projectModal')">×</button></div>
+      <label>项目名称<input id="newProjectName" class="form-input" required maxlength="120" placeholder="例如：quantitativeInvestment"></label>
+      <label>代码目录（每行一个）
+        <textarea id="newProjectRoots" class="form-input form-textarea" required placeholder="C:/workspace/backend&#10;C:/workspace/frontend"></textarea>
+      </label>
+      <label>说明（可选）<textarea id="newProjectDescription" class="form-input" rows="3"></textarea></label>
+      <div class="workspace-modal-actions"><button type="button" class="btn-secondary" onclick="closeModal('projectModal')">取消</button><button class="send-btn" type="submit">创建项目</button></div>
+    </form>
+  </div>
+
+  <div id="workItemModal" class="workspace-modal" hidden>
+    <form class="workspace-modal-card" onsubmit="createWorkItem(event)">
+      <div class="workspace-modal-heading"><h2>新建工作项</h2><button type="button" onclick="closeModal('workItemModal')">×</button></div>
+      <p class="workspace-modal-context">所属项目：<strong id="workItemProjectName"></strong></p>
+      <div class="form-grid">
+        <label>类型
+          <select id="newWorkItemType" class="form-input">
+            <option value="feature">Feature</option><option value="function">Function</option>
+            <option value="bug">Bug</option><option value="refactor">Refactor</option>
+            <option value="maintenance">Maintenance</option><option value="research">Research</option>
+          </select>
+        </label>
+        <label>优先级
+          <select id="newWorkItemPriority" class="form-input"><option>P0</option><option selected>P1</option><option>P2</option><option>P3</option></select>
+        </label>
+      </div>
+      <label>名称<input id="newWorkItemTitle" class="form-input" required maxlength="160" placeholder="例如：实现滚动市盈率展示"></label>
+      <label>目标<textarea id="newWorkItemGoal" class="form-input form-textarea" placeholder="说明这个工作项需要交付什么"></textarea></label>
+      <label>截止日期（可选）<input id="newWorkItemDeadline" class="form-input short-input" type="date"></label>
+      <div class="workspace-modal-actions"><button type="button" class="btn-secondary" onclick="closeModal('workItemModal')">取消</button><button class="send-btn" type="submit">创建工作项</button></div>
+    </form>
+  </div>
+
+  <div id="sourceModal" class="workspace-modal" hidden>
+    <div class="workspace-modal-card workspace-source-modal-card">
+      <div class="workspace-modal-heading"><h2 id="sourceModalTitle">来源会话片段</h2><button type="button" onclick="closeModal('sourceModal')">×</button></div>
+      <div id="sourceModalBody" class="workspace-source-list"></div>
+    </div>
+  </div>
+
+  <div id="contextModal" class="workspace-modal" hidden>
+    <div class="workspace-modal-card workspace-context-modal-card">
+      <div class="workspace-modal-heading"><h2 id="contextModalTitle">工作项上下文包</h2><button type="button" onclick="closeModal('contextModal')">×</button></div>
+      <p id="contextModalMeta" class="workspace-modal-context"></p>
+      <p class="workspace-modal-context">这是供当前 AI 读取的脱敏交接文件。若要在 ChatGPT App 的 Codex 中继续，请使用下方“导出提示词”按钮。</p>
+      <pre id="contextModalContent" class="workspace-context-content"></pre>
+      <div class="workspace-context-actions">
+        <button type="button" class="send-btn" onclick="copyContextContinuePrompt()">导出提示词</button>
+        <button type="button" class="btn-secondary" onclick="copyContextPackage()">复制交接文件内容（备用）</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="continuePromptModal" class="workspace-modal" hidden>
+    <div class="workspace-modal-card workspace-context-modal-card">
+      <div class="workspace-modal-heading"><h2 id="continuePromptTitle">继续开发提示词</h2><button type="button" onclick="closeModal('continuePromptModal')">×</button></div>
+      <p id="continuePromptMeta" class="workspace-modal-context"></p>
+      <p class="workspace-modal-context">提示词会先读取项目内自动生成的脱敏交接文件。打开 ChatGPT App 的 Codex 并选择同一项目后，直接粘贴即可继续。</p>
+      <pre id="continuePromptContent" class="workspace-context-content"></pre>
+      <div class="workspace-context-actions">
+        <button type="button" class="send-btn" onclick="copyContinuePrompt()">导出提示词</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="completeWorkItemModal" class="workspace-modal" hidden>
+    <form class="workspace-modal-card" onsubmit="completeWorkItem(event)">
+      <div class="workspace-modal-heading"><h2>标记工作项完成</h2><button type="button" onclick="closeModal('completeWorkItemModal')">×</button></div>
+      <p class="workspace-modal-context">工作项：<strong id="completeWorkItemTitle"></strong></p>
+      <label>完成说明（可选）<textarea id="completionNote" class="form-input form-textarea" rows="3" placeholder="例如：已完成 TTM PE 计算、存储、接口与前端图表"></textarea></label>
+      <label>验收结果（可选）<textarea id="acceptanceResult" class="form-input form-textarea" rows="3" placeholder="例如：相关测试通过；接口响应与图表数据已人工核对"></textarea></label>
+      <p class="workspace-modal-context">会保留完成时间和本次说明；之后仍可恢复为进行中继续返工。</p>
+      <div class="workspace-modal-actions"><button type="button" class="btn-secondary" onclick="closeModal('completeWorkItemModal')">取消</button><button class="send-btn" type="submit">确认完成</button></div>
+    </form>
+  </div>
+
+  <div id="mergeModal" class="workspace-modal" hidden>
+    <form class="workspace-modal-card" onsubmit="mergeSelectedItems(event)">
+      <div class="workspace-modal-heading"><h2>合并重复工作项</h2><button type="button" onclick="closeModal('mergeModal')">×</button></div>
+      <p class="workspace-modal-context">选择一个保留项。其他工作项的来源片段会迁移到保留项，原工作项归档并保留记录。</p>
+      <div id="mergeTargetList" class="workspace-merge-target-list"></div>
+      <div class="workspace-modal-actions"><button type="button" class="btn-secondary" onclick="closeModal('mergeModal')">取消</button><button class="send-btn" type="submit">确认合并</button></div>
+    </form>
+  </div>
+
+  <div id="workspacePageToast" class="workspace-toast"></div>
+
+  <script>
+    const SELECTED_PROJECT_KEY = "work-assistant-selected-project";
+    const TYPE_LABELS = { feature: "Feature", function: "Function", bug: "Bug", refactor: "Refactor", maintenance: "Maintenance", research: "Research", other: "Other" };
+    const STATUS_LABELS = { suggested: "待确认", backlog: "待办", planned: "已规划", in_progress: "进行中", blocked: "阻塞", completed: "已完成", archived: "已归档", ignored: "已忽略" };
+    let projects = [];
+    let selectedProject = null;
+    let workItems = [];
+    let currentFilter = "formal";
+    let currentAnalysisRun = null;
+    let analysisPollTimer = null;
+    let projectDiscussions = [];
+    let activeContextPackage = null;
+    let completingWorkItemId = null;
+    const selectedMergeItems = new Set();
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+
+    async function api(url, options = {}) {
+      const response = await fetch(url, options);
+      let data = {};
+      try { data = await response.json(); } catch (_) {}
+      if (!response.ok) throw new Error(data.error || `请求失败（HTTP ${response.status}）`);
+      return data;
+    }
+
+    function toast(message, kind = "success") {
+      const element = document.getElementById("workspacePageToast");
+      element.textContent = message;
+      element.className = "workspace-toast " + kind + " visible";
+      clearTimeout(toast.timer);
+      toast.timer = setTimeout(() => element.classList.remove("visible"), 2600);
+    }
+
+    async function refreshTopbarAMDStatus() {
+      const control = document.getElementById("topbarAMDStatus");
+      try {
+        const response = await fetch("/api/amd/status?force=false");
+        const status = await response.json();
+        const online = response.ok && Boolean(status.online);
+        control.classList.toggle("online", online);
+        control.classList.toggle("offline", !online);
+        control.querySelector("span").textContent = online ? "AMD 在线" : "AMD 离线";
+        control.title = status.message || "查看或修改 AMD 连接配置";
+      } catch (_) {
+        control.classList.add("offline");
+        control.querySelector("span").textContent = "AMD 未连接";
+      }
+    }
+
+    async function syncAllConversations() {
+      const button = document.getElementById("topbarSyncButton");
+      button.disabled = true;
+      button.textContent = "正在同步…";
+      try {
+        const response = await fetch("/api/conversations/sync-all", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "同步失败");
+        toast(`已同步会话，项目索引更新 ${data.workspace.imported || 0} 条`, "success");
+        await loadWorkspace(selectedProject?.project_id || null);
+      } catch (error) {
+        toast(error.message || "同步失败", "error");
+      } finally {
+        button.disabled = false;
+        button.textContent = "↻ 同步";
+      }
+    }
+
+    async function loadWorkspace(preferredProjectId = null) {
+      try {
+        projects = await api("/api/workspace/overview");
+        renderProjectList();
+        const saved = preferredProjectId || localStorage.getItem(SELECTED_PROJECT_KEY);
+        const target = projects.find(project => project.project_id === saved) || projects[0];
+        if (target) await selectProject(target.project_id);
+        else showEmptyWorkspace();
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    }
+
+    function renderProjectList() {
+      const list = document.getElementById("workspaceProjectList");
+      if (!projects.length) {
+        list.innerHTML = '<div class="workspace-project-list-empty">暂无项目</div>';
+        return;
+      }
+      list.innerHTML = projects.map(project => `
+        <button class="workspace-project-row ${selectedProject?.project_id === project.project_id ? "active" : ""}"
+                onclick="selectProject('${escapeHtml(project.project_id)}')">
+          <span class="workspace-project-glyph">◇</span>
+          <span><strong>${escapeHtml(project.name)}</strong><small>${project.work_item_total} 个工作项 · ${project.roots.length} 个目录</small></span>
+          ${project.work_item_counts.suggested ? `<em>${project.work_item_counts.suggested}</em>` : ""}
+        </button>`).join("");
+    }
+
+    async function selectProject(projectId) {
+      selectedProject = await api("/api/workspace/projects/" + encodeURIComponent(projectId));
+      localStorage.setItem(SELECTED_PROJECT_KEY, projectId);
+      workItems = await api("/api/workspace/work-items?project_id=" + encodeURIComponent(projectId) + "&include_ignored=true");
+      projectDiscussions = await api(`/api/workspace/projects/${encodeURIComponent(projectId)}/segments?segment_kind=project&limit=200`);
+      selectedMergeItems.clear();
+      document.getElementById("workspaceEmpty").hidden = true;
+      document.getElementById("workspaceProjectDetail").hidden = false;
+      document.getElementById("projectTitle").textContent = selectedProject.name;
+      document.getElementById("projectDescription").textContent = selectedProject.description || "项目级信息只展示工作项统计，不计算虚构的整体完成百分比。";
+      document.getElementById("projectConversationSummary").innerHTML = `
+        <span class="workspace-conversation-total"><strong>${selectedProject.conversation_count || 0}</strong> 条关联会话</span>
+        <span class="workspace-conversation-chip source-codex">Codex ${selectedProject.conversation_counts?.codex || 0}</span>
+        <span class="workspace-conversation-chip source-claude">Claude ${selectedProject.conversation_counts?.claude || 0}</span>`;
+      document.getElementById("summaryActive").textContent = selectedProject.active_work_item_count;
+      document.getElementById("summarySuggested").textContent = selectedProject.work_item_counts.suggested;
+      document.getElementById("summaryCompleted").textContent = selectedProject.work_item_counts.completed;
+      document.getElementById("summaryIgnored").textContent = selectedProject.work_item_counts.ignored;
+      document.getElementById("suggestedTabCount").textContent = selectedProject.work_item_counts.suggested;
+      document.getElementById("projectRoots").value = selectedProject.roots.map(root => root.path).join("\n");
+      renderProjectList();
+      renderWorkItems();
+      await loadProjectAnalysis(projectId);
+    }
+
+    function showEmptyWorkspace() {
+      selectedProject = null;
+      document.getElementById("workspaceEmpty").hidden = false;
+      document.getElementById("workspaceProjectDetail").hidden = true;
+    }
+
+    function configuredProjectDirectories() {
+      return document.getElementById("projectRoots").value.split("\n").map(path => path.trim()).filter(Boolean);
+    }
+
+    async function copyProjectDirectories() {
+      const paths = configuredProjectDirectories();
+      if (!paths.length) return toast("没有可复制的项目目录", "error");
+      const content = paths.join("\n");
+      try {
+        await navigator.clipboard.writeText(content);
+        toast("项目目录已复制");
+      } catch (_) {
+        const editor = document.getElementById("projectRoots");
+        editor.focus(); editor.select();
+        toast("复制权限不可用，目录已选中，请按 Ctrl+C", "error");
+      }
+    }
+
+    async function saveProjectDirectories() {
+      if (!selectedProject) return toast("请先选择项目", "error");
+      const root_paths = configuredProjectDirectories();
+      if (!root_paths.length) return toast("请至少填写一个项目目录", "error");
+      try {
+        await api(`/api/workspace/projects/${encodeURIComponent(selectedProject.project_id)}/roots`, {
+          method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({root_paths})
+        });
+        toast("项目目录已保存；后续续接提示词会使用此配置");
+        await loadWorkspace(selectedProject.project_id);
+      } catch (error) { toast(error.message || "保存项目目录失败", "error"); }
+    }
+
+    function filteredWorkItems() {
+      if (currentFilter === "project_discussions") return [];
+      if (currentFilter === "suggested") return workItems.filter(item => item.status === "suggested");
+      if (currentFilter === "ignored") return workItems.filter(item => item.status === "ignored");
+      if (currentFilter === "completed") return workItems.filter(item => item.status === "completed");
+      return workItems.filter(item => !["suggested", "ignored", "completed", "archived"].includes(item.status));
+    }
+
+    function renderWorkItems() {
+      const list = document.getElementById("workItemList");
+      const mergeToolbar = document.getElementById("mergeToolbar");
+      mergeToolbar.hidden = currentFilter !== "suggested";
+      document.getElementById("mergeSelectedCount").textContent = selectedMergeItems.size;
+      if (currentFilter === "project_discussions") {
+        renderProjectDiscussions();
+        return;
+      }
+      const items = filteredWorkItems();
+      if (!items.length) {
+        const messages = {
+          formal: "这个项目还没有进行中的工作项。",
+          suggested: "没有待确认工作项；自动分析发现的新事项会显示在这里。",
+          ignored: "没有已忽略工作项。",
+          completed: "还没有已完成工作项。",
+          project_discussions: "暂时没有识别到项目级讨论。",
+        };
+        const suggestedCount = workItems.filter(item => item.status === "suggested").length;
+        const actions = currentFilter === "formal"
+          ? (suggestedCount
+            ? `<div class="workspace-empty-actions"><button class="send-btn" onclick="setWorkItemFilter('suggested')">查看 ${suggestedCount} 个待确认工作项</button><button class="btn-secondary" onclick="openWorkItemModal()">新建工作项</button></div>`
+            : '<div class="workspace-empty-actions"><button class="send-btn" onclick="openWorkItemModal()">新建工作项</button></div>')
+          : currentFilter === "suggested"
+            ? '<div class="workspace-empty-actions"><button class="btn-secondary" onclick="openWorkItemModal()">新建工作项</button></div>'
+            : "";
+        const guidance = currentFilter === "formal" && suggestedCount
+          ? `已发现 ${suggestedCount} 个待确认工作项。先确认、忽略或合并它们，再开始后续工作。`
+          : messages[currentFilter];
+        list.innerHTML = `<div class="workspace-items-empty"><p>${guidance}</p>${actions}</div>`;
+        return;
+      }
+      list.innerHTML = items.map(item => {
+        const progress = item.completion_percent === null
+          ? '<span class="workspace-no-plan">未建立计划 · 不计算百分比</span>'
+          : `<div class="workspace-item-progress"><span><i style="width:${item.completion_percent}%"></i></span><em>${item.completion_percent}%</em></div>`;
+        let actions = "";
+        if (item.status === "suggested") actions = `<button onclick="confirmItem('${item.work_item_id}')">确认</button><button onclick="ignoreItem('${item.work_item_id}')">忽略</button><button class="workspace-continue-prompt" onclick="copyContinuePromptForWorkItem('${item.work_item_id}')">导出提示词</button>`;
+        if (item.status === "ignored") actions = `<button onclick="restoreItem('${item.work_item_id}')">恢复到待确认</button>`;
+        if (["backlog", "planned", "in_progress", "blocked"].includes(item.status)) {
+          actions += `<button class="workspace-continue-prompt" onclick="copyContinuePromptForWorkItem('${item.work_item_id}')">导出提示词</button>`;
+          actions += `<button onclick="openCompleteWorkItemModal('${item.work_item_id}')">标记完成</button>`;
+        }
+        if (item.status === "completed") actions += `<button onclick="reopenWorkItem('${item.work_item_id}')">恢复为进行中</button>`;
+        actions += `<button onclick="openWorkItemSources('${item.work_item_id}', '${escapeHtml(item.title).replace(/'/g, "&#39;")}')">查看来源片段</button>`;
+        actions += `<button onclick="generateWorkItemContext('${item.work_item_id}')">查看交接文件</button>`;
+        return `<article class="workspace-item-card status-${item.status}">
+          <div class="workspace-item-card-heading"><div>${item.status === "suggested" ? `<label class="workspace-merge-check" title="选择后合并"><input type="checkbox" ${selectedMergeItems.has(item.work_item_id) ? "checked" : ""} onchange="toggleMergeItem('${item.work_item_id}', this.checked)"><span></span></label>` : ""}<span class="workspace-type-badge type-${item.item_type}">${TYPE_LABELS[item.item_type] || item.item_type}</span><span class="workspace-status-badge">${STATUS_LABELS[item.status] || item.status}</span></div><code>${escapeHtml(item.work_item_id)}</code></div>
+          <h3>${escapeHtml(item.title)}</h3>
+          <p>${escapeHtml(item.goal || item.description || "尚未补充工作项目标")}</p>
+          ${progress}
+          <div class="workspace-item-meta"><span>创建：${formatDate(item.created_at)}</span>${item.completed_at ? `<span>完成：${formatDate(item.completed_at)}</span>` : ""}${item.source === "inferred" ? `<span>自动发现${item.confidence === null ? "" : ` · ${Math.round(item.confidence * 100)}%`}</span>` : "<span>手动创建</span>"}</div>
+          ${actions ? `<div class="workspace-item-actions">${actions}</div>` : ""}
+        </article>`;
+      }).join("");
+    }
+
+    function renderProjectDiscussions() {
+      const list = document.getElementById("workItemList");
+      if (!projectDiscussions.length) {
+        list.innerHTML = '<div class="workspace-items-empty"><p>暂时没有识别到项目级讨论。</p></div>';
+        return;
+      }
+      list.innerHTML = projectDiscussions.map(segment => {
+        const conversation = segment.conversation || {};
+        const source = conversation.source === "codex" ? "Codex" : conversation.source === "claude" ? "Claude" : "Work Assistant";
+        return `<article class="workspace-item-card workspace-discussion-card">
+          <div class="workspace-item-card-heading"><div><span class="workspace-type-badge type-other">项目讨论</span><span class="workspace-source-badge source-${escapeHtml(conversation.source)}">${source}</span></div><span>${formatDate(conversation.updated_at)}</span></div>
+          <h3>${escapeHtml(segment.title || conversation.title || "项目级讨论")}</h3>
+          <p>${escapeHtml(segment.summary || "该片段讨论项目整体状态、架构或规划，不自动建立具体工作项。")}</p>
+          <div class="workspace-item-actions"><button onclick="openProjectDiscussion('${segment.segment_id}')">查看对话片段</button></div>
+        </article>`;
+      }).join("");
+    }
+
+    function toggleMergeItem(id, checked) {
+      if (checked) selectedMergeItems.add(id); else selectedMergeItems.delete(id);
+      document.getElementById("mergeSelectedCount").textContent = selectedMergeItems.size;
+    }
+
+    function openMergeModal() {
+      const selected = workItems.filter(item => selectedMergeItems.has(item.work_item_id) && item.status === "suggested");
+      if (selected.length < 2) return toast("请至少选择两个待确认工作项", "error");
+      document.getElementById("mergeTargetList").innerHTML = selected.map((item, index) => `
+        <label class="workspace-merge-target"><input type="radio" name="mergeTarget" value="${escapeHtml(item.work_item_id)}" ${index === 0 ? "checked" : ""}><span><strong>${escapeHtml(item.title)}</strong><small>${TYPE_LABELS[item.item_type] || item.item_type} · ${escapeHtml(item.work_item_id)}</small></span></label>`).join("");
+      openModal("mergeModal");
+    }
+
+    async function mergeSelectedItems(event) {
+      event.preventDefault();
+      const target = document.querySelector('input[name="mergeTarget"]:checked')?.value;
+      if (!target) return toast("请选择保留项", "error");
+      const sources = [...selectedMergeItems].filter(id => id !== target);
+      try {
+        await api(`/api/workspace/work-items/${encodeURIComponent(target)}/merge`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({source_work_item_ids:sources})
+        });
+        closeModal("mergeModal"); selectedMergeItems.clear(); toast(`已合并 ${sources.length} 个重复工作项`);
+        await loadWorkspace(selectedProject.project_id);
+      } catch (error) { toast(error.message, "error"); }
+    }
+
+    function sourceLabel(source) {
+      return source === "codex" ? "Codex" : source === "claude" ? "Claude" : "Work Assistant";
+    }
+
+    const COMMAND_BLOCK_LANGUAGES = new Set(["bash", "console", "cmd", "command", "fish", "powershell", "pwsh", "shell", "sh", "terminal", "zsh"]);
+
+    function sourceMessageRole(role) {
+      if (role === "user") return { label: "人类输入", kind: "human" };
+      if (role === "assistant") return { label: "AI 回复", kind: "ai" };
+      return { label: "系统信息", kind: "system" };
+    }
+
+    function codeLanguageLabel(language) {
+      const normalized = (language || "").toLowerCase();
+      const labels = {
+        js: "JavaScript", javascript: "JavaScript", ts: "TypeScript", typescript: "TypeScript",
+        py: "Python", python: "Python", html: "HTML", css: "CSS", json: "JSON",
+        sql: "SQL", java: "Java", go: "Go", rust: "Rust", csharp: "C#",
+        bash: "Shell", sh: "Shell", shell: "Shell", zsh: "Shell", fish: "Shell",
+        powershell: "PowerShell", pwsh: "PowerShell", cmd: "Windows 命令", console: "终端",
+      };
+      return labels[normalized] || (language ? language : "未标注语言");
+    }
+
+    function looksLikeCommandBlock(language, content) {
+      if (COMMAND_BLOCK_LANGUAGES.has((language || "").toLowerCase())) return true;
+      const firstLine = content.trim().split("\n")[0] || "";
+      return /^(?:\$ |PS [^>]+>|(?:npm|pnpm|yarn|git|python(?:3)?|pytest|uv|rg|docker|cd|ls|dir)\b)/i.test(firstLine);
+    }
+
+    function renderAssistantReply(content) {
+      const text = String(content || "");
+      const toolEvent = text.match(/^\[external_agent_tool_(call|result)(?::\s*([^\]]+))?\]\s*([\s\S]*?)\s*\[\/external_agent_tool_\1\]\s*$/);
+      if (toolEvent) {
+        const [, eventType, toolName, toolContent] = toolEvent;
+        const label = eventType === "call" ? "AI 执行的操作" : "AI 操作结果";
+        const detail = toolName ? ` · ${escapeHtml(toolName.trim())}` : "";
+        const contentHtml = `<pre><code>${escapeHtml(toolContent.trim())}</code></pre>`;
+        return eventType === "call"
+          ? `<div class="workspace-source-tool-call"><strong>${label}${detail}</strong>${contentHtml}</div>`
+          : `<details class="workspace-source-tool-result"><summary><span>${label}${detail}</span><em>点击展开</em></summary>${contentHtml}</details>`;
+      }
+      const fence = /```([^\n`]*)\n?([\s\S]*?)```/g;
+      let html = "";
+      let cursor = 0;
+      let blockNumber = 0;
+      let match;
+
+      const appendText = (value) => {
+        if (value.trim()) html += `<div class="workspace-source-ai-text">${escapeHtml(value.trim())}</div>`;
+      };
+      while ((match = fence.exec(text))) {
+        appendText(text.slice(cursor, match.index));
+        const language = match[1].trim().toLowerCase();
+        const code = match[2].replace(/^\n|\n$/g, "");
+        const lineCount = code ? code.split("\n").length : 0;
+        blockNumber += 1;
+        if (looksLikeCommandBlock(language, code)) {
+          html += `<details class="workspace-source-command" open><summary><span>AI 执行的命令</span><em>${escapeHtml(codeLanguageLabel(language))} · ${lineCount} 行</em></summary><pre><code>${escapeHtml(code)}</code></pre></details>`;
+        } else {
+          html += `<details class="workspace-source-code"><summary><span>AI 回复中的代码 ${blockNumber}</span><em>${escapeHtml(codeLanguageLabel(language))} · ${lineCount} 行 · 点击展开</em></summary><pre><code>${escapeHtml(code)}</code></pre></details>`;
+        }
+        cursor = fence.lastIndex;
+      }
+      appendText(text.slice(cursor));
+      return html || '<div class="workspace-source-ai-text">（AI 未返回可展示文本）</div>';
+    }
+
+    function renderSourceMessage(message, index) {
+      const role = sourceMessageRole(message.role);
+      const content = message.role === "assistant"
+        ? renderAssistantReply(message.content)
+        : `<div class="workspace-source-plain-text">${escapeHtml(message.content)}</div>`;
+      return `<article class="workspace-source-message role-${role.kind}">
+        <div class="workspace-source-message-heading"><span>${role.label}</span><em>第 ${index + 1} 条</em></div>
+        <div class="workspace-source-message-content">${content}</div>
+      </article>`;
+    }
+
+    function renderSourceSegments(title, segments) {
+      document.getElementById("sourceModalTitle").textContent = title;
+      const body = document.getElementById("sourceModalBody");
+      if (!segments.length) {
+        body.innerHTML = '<div class="workspace-items-empty"><p>这个工作项还没有关联来源片段。</p></div>';
+      } else {
+        body.innerHTML = segments.map(segment => {
+          const conversation = segment.conversation || {};
+          const label = sourceLabel(conversation.source);
+          const segmentMessages = segment.messages || [];
+          const messageCounts = segmentMessages.reduce((counts, message) => {
+            counts[message.role] = (counts[message.role] || 0) + 1;
+            return counts;
+          }, {});
+          const summary = [
+            messageCounts.user ? `${messageCounts.user} 条人类输入` : "",
+            messageCounts.assistant ? `${messageCounts.assistant} 条 AI 回复` : "",
+            messageCounts.system ? `${messageCounts.system} 条系统信息` : "",
+          ].filter(Boolean).join(" · ");
+          const messages = segmentMessages.map(renderSourceMessage).join("");
+          return `<article class="workspace-source-segment">
+            <header><div><span class="workspace-source-badge source-${escapeHtml(conversation.source)}">${label}</span><strong>${escapeHtml(segment.title || conversation.title || "会话片段")}</strong></div><span>${formatDate(conversation.started_at)}</span></header>
+            ${segment.summary ? `<p>${escapeHtml(segment.summary)}</p>` : ""}
+            <div class="workspace-source-segment-summary">${summary || `${segmentMessages.length} 条消息`}</div>
+            <div class="workspace-source-messages">${messages}</div>
+          </article>`;
+        }).join("");
+      }
+      openModal("sourceModal");
+    }
+
+    async function openWorkItemSources(id, title) {
+      try { renderSourceSegments(title + " · 来源片段", await api(`/api/workspace/work-items/${encodeURIComponent(id)}/sources`)); }
+      catch (error) { toast(error.message, "error"); }
+    }
+
+    async function generateWorkItemContext(workItemId) {
+      const item = workItems.find(candidate => candidate.work_item_id === workItemId);
+      try {
+        const result = await api(`/api/workspace/work-items/${encodeURIComponent(workItemId)}/context-packages`, {method:"POST"});
+        await openContextPackage(result.package.context_id, item?.title || "工作项", result.package.created ? "已生成新版本" : "已使用已有版本");
+      } catch (error) { toast(error.message || "生成上下文包失败", "error"); }
+    }
+
+    async function requestContinuePrompt(workItemId) {
+      const item = workItems.find(candidate => candidate.work_item_id === workItemId);
+      const result = await api(`/api/workspace/work-items/${encodeURIComponent(workItemId)}/continue-prompt`, {method:"POST"});
+      document.getElementById("continuePromptTitle").textContent = `${item?.title || "工作项"} · ChatGPT Codex 续接提示词`;
+      const completion = item?.completion_percent === null || item?.completion_percent === undefined
+        ? "未建立计划步骤" : `${item.completion_percent}%`;
+      const gaps = result.missing_information || [];
+      const gapHint = gaps.length
+        ? ` · 需向用户补充 ${gaps.length} 项业务信息`
+        : " · 业务信息检查通过";
+      const handoffHint = result.handoff_available
+        ? ` · 交接文件：${result.handoff_path}`
+        : ` · ${result.handoff_error || "项目内交接文件不可用"}`;
+      document.getElementById("continuePromptMeta").textContent =
+        `基于当前工作项状态生成 · 计划完成度：${completion} · 上下文包 v${result.context_package.version}${gapHint}${handoffHint}`;
+      document.getElementById("continuePromptContent").textContent = result.prompt;
+      return result;
+    }
+
+    async function generateContinuePrompt(workItemId) {
+      try { await requestContinuePrompt(workItemId); openModal("continuePromptModal"); }
+      catch (error) { toast(error.message || "生成继续开发提示词失败", "error"); }
+    }
+
+    async function copyContinuePromptForWorkItem(workItemId) {
+      try {
+        const result = await requestContinuePrompt(workItemId);
+        await navigator.clipboard.writeText(result.prompt);
+        toast("提示词已导出到剪贴板。打开 ChatGPT App 的 Codex，选择同一项目并新建对话后直接粘贴。", "success");
+      } catch (error) {
+        toast(error.message || "自动复制失败，已打开提示词供手动复制", "error");
+        if (document.getElementById("continuePromptContent").textContent.trim()) openModal("continuePromptModal");
+      }
+    }
+
+    async function copyContinuePrompt() {
+      const content = document.getElementById("continuePromptContent").textContent || "";
+      if (!content.trim()) return toast("没有可复制的提示词", "error");
+      try {
+        await navigator.clipboard.writeText(content);
+        toast("提示词已导出到剪贴板。请在 ChatGPT App 的 Codex 中打开同一项目、新建对话后粘贴。");
+      } catch (_) { toast("复制失败，请手动选中文本复制", "error"); }
+    }
+
+    async function openContextPackage(contextId, title, notice = "") {
+      try {
+        const result = await api(`/api/workspace/context-packages/${encodeURIComponent(contextId)}/content`);
+        activeContextPackage = result.package;
+        document.getElementById("contextModalTitle").textContent = `${title} · 上下文包`;
+        document.getElementById("contextModalMeta").textContent =
+          `v${result.package.version} · ${notice || "本地保存"} · ${formatDate(result.package.created_at)}`;
+        document.getElementById("contextModalContent").textContent = result.content;
+        openModal("contextModal");
+      } catch (error) { toast(error.message || "读取上下文包失败", "error"); }
+    }
+
+    async function copyContextPackage() {
+      const content = document.getElementById("contextModalContent").textContent || "";
+      if (!content.trim()) return toast("没有可复制的上下文内容", "error");
+      try {
+        await navigator.clipboard.writeText(content);
+        toast("已复制上下文包内容");
+      } catch (_) { toast("复制失败，请手动选中文本复制", "error"); }
+    }
+
+    async function copyContextContinuePrompt() {
+      if (!activeContextPackage?.work_item_id) return toast("上下文包未关联工作项", "error");
+      closeModal("contextModal");
+      await copyContinuePromptForWorkItem(activeContextPackage.work_item_id);
+    }
+
+    async function openProjectDiscussion(segmentId) {
+      try {
+        const segment = await api(`/api/workspace/segments/${encodeURIComponent(segmentId)}`);
+        renderSourceSegments("项目级讨论", [segment]);
+      } catch (error) { toast(error.message, "error"); }
+    }
+
+    function formatDate(value) {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+    }
+
+    const ANALYSIS_STATUS_LABELS = {
+      queued: "等待中", running: "分析中", paused: "已暂停", completed: "已完成",
+      failed: "失败", cancelled: "已取消"
+    };
+    const ANALYSIS_STAGE_LABELS = {
+      queued: "等待后台线程", local_screening: "本地规则初筛",
+      syncing_local_conversations: "正在同步本机 Codex / Claude 会话",
+      matching_projects: "正在匹配会话所属项目",
+      segmenting_conversations: "正在生成会话分析片段",
+      amd_classification: "AMD 语义分析", cancellation_requested: "正在停止当前批次",
+      cancelled: "已停止", finished: "分析结束", failed: "分析失败", interrupted: "服务重启时中断"
+    };
+
+    function stopAnalysisPolling() {
+      if (analysisPollTimer) clearTimeout(analysisPollTimer);
+      analysisPollTimer = null;
+    }
+
+    async function loadProjectAnalysis(projectId) {
+      stopAnalysisPolling();
+      try {
+        const runs = await api("/api/workspace/classification-runs?limit=50");
+        currentAnalysisRun = runs.find(run => run.request?.project_id === projectId) || null;
+        renderAnalysisRun();
+        scheduleAnalysisPoll();
+      } catch (error) {
+        document.getElementById("analysisRunEmpty").textContent = "无法读取分析状态：" + error.message;
+      }
+    }
+
+    function renderAnalysisRun() {
+      const empty = document.getElementById("analysisRunEmpty");
+      const detail = document.getElementById("analysisRunDetail");
+      const startButton = document.getElementById("startAnalysisButton");
+      const active = currentAnalysisRun && ["queued", "running", "paused"].includes(currentAnalysisRun.status);
+      startButton.disabled = Boolean(active);
+      startButton.textContent = active ? "分析正在运行" : "开始增量分析";
+      if (!currentAnalysisRun) {
+        empty.hidden = false; detail.hidden = true; return;
+      }
+      empty.hidden = true; detail.hidden = false;
+      const run = currentAnalysisRun;
+      const badge = document.getElementById("analysisStatusBadge");
+      badge.textContent = ANALYSIS_STATUS_LABELS[run.status] || run.status;
+      badge.className = "workspace-analysis-badge status-" + run.status;
+      document.getElementById("analysisStage").textContent = ANALYSIS_STAGE_LABELS[run.stage] || run.stage;
+      document.getElementById("analysisProgressHint").textContent = `已处理 ${run.processed_sources || 0} / ${run.total_sources || 0} 个来源`;
+      document.getElementById("analysisRunId").textContent = run.run_id;
+      document.getElementById("analysisProgressBar").style.width = `${run.completion_percent || 0}%`;
+      document.getElementById("analysisProgressText").textContent = `完成 ${run.completion_percent || 0}%`;
+      document.getElementById("analysisStats").innerHTML = `
+        <span><strong>${run.discovered_count}</strong><small>发现工作项</small></span>
+        <span><strong>${run.processed_sources || 0}</strong><small>已处理来源</small></span>
+        <span><strong>${run.unclassified_count}</strong><small>未分类来源</small></span>`;
+      document.getElementById("analysisTechnicalStats").textContent =
+        `AMD 请求 ${run.amd_call_count || 0} 次 · 已脱敏 ${run.credential_redaction_count || 0} 处`;
+      const error = document.getElementById("analysisError");
+      error.hidden = !run.error_message;
+      error.textContent = run.error_message || "";
+      const actions = [];
+      if (["queued", "running"].includes(run.status)) {
+        actions.push('<button class="btn-secondary" onclick="controlAnalysis(\'pause\')">暂停</button>');
+        actions.push('<button class="btn-secondary danger" onclick="controlAnalysis(\'cancel\')">取消</button>');
+      } else if (run.status === "paused") {
+        actions.push('<button class="send-btn" onclick="controlAnalysis(\'resume\')">继续</button>');
+        actions.push('<button class="btn-secondary danger" onclick="controlAnalysis(\'cancel\')">取消</button>');
+      } else if (["failed", "cancelled"].includes(run.status)) {
+        actions.push('<button class="send-btn" onclick="controlAnalysis(\'retry\')">增量重试</button>');
+      }
+      document.getElementById("analysisActions").innerHTML = actions.join("");
+    }
+
+    function scheduleAnalysisPoll() {
+      stopAnalysisPolling();
+      if (!currentAnalysisRun || !["queued", "running", "paused"].includes(currentAnalysisRun.status)) return;
+      analysisPollTimer = setTimeout(refreshAnalysisRun, 1500);
+    }
+
+    async function refreshAnalysisRun() {
+      if (!currentAnalysisRun || !selectedProject) return;
+      const projectId = selectedProject.project_id;
+      try {
+        const previousStatus = currentAnalysisRun.status;
+        currentAnalysisRun = await api(`/api/workspace/classification-runs/${encodeURIComponent(currentAnalysisRun.run_id)}`);
+        if (selectedProject?.project_id !== projectId) return;
+        renderAnalysisRun();
+        if (["completed", "failed", "cancelled"].includes(currentAnalysisRun.status) && currentAnalysisRun.status !== previousStatus) {
+          toast(currentAnalysisRun.status === "completed" ? "会话分析已完成" : (currentAnalysisRun.status === "cancelled" ? "分析已取消" : "分析失败，可增量重试"), currentAnalysisRun.status === "completed" ? "success" : "error");
+          await loadWorkspace(projectId);
+          return;
+        }
+      } catch (error) { toast(error.message, "error"); }
+      scheduleAnalysisPoll();
+    }
+
+    async function startAnalysis() {
+      if (!selectedProject) return toast("请先选择项目", "error");
+      try {
+        const health = await api("/api/amd/status");
+        if (!health.online) throw new Error(health.message || "AMD 服务当前不可用，请先在主界面修改连接配置");
+        const data = await api("/api/workspace/conversations/discover-work-items", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({project_id: selectedProject.project_id, force: false})
+        });
+        currentAnalysisRun = data.run;
+        renderAnalysisRun(); scheduleAnalysisPoll(); toast("后台分析已启动");
+      } catch (error) { toast(error.message, "error"); }
+    }
+
+    async function controlAnalysis(action) {
+      if (!currentAnalysisRun) return;
+      try {
+        const data = await api(`/api/workspace/classification-runs/${encodeURIComponent(currentAnalysisRun.run_id)}/${action}`, {method:"POST"});
+        currentAnalysisRun = data.run;
+        renderAnalysisRun(); scheduleAnalysisPoll();
+        const labels = {pause:"已请求暂停", resume:"分析已继续", cancel:"已请求取消", retry:"已创建增量重试任务"};
+        toast(labels[action] || "操作成功");
+      } catch (error) { toast(error.message, "error"); }
+    }
+
+    async function copyAnalysisRunId() {
+      const runId = document.getElementById("analysisRunId").textContent || "";
+      if (!runId) return toast("没有可复制的运行 ID", "error");
+      try { await navigator.clipboard.writeText(runId); toast("运行 ID 已复制"); }
+      catch (_) { toast("复制失败，请手动选中运行 ID", "error"); }
+    }
+
+    function openModal(id) { document.getElementById(id).hidden = false; }
+    function closeModal(id) { document.getElementById(id).hidden = true; }
+    function openWorkItemModal() {
+      if (!selectedProject) return toast("请先选择项目", "error");
+      document.getElementById("workItemProjectName").textContent = selectedProject.name;
+      openModal("workItemModal");
+    }
+
+    async function createProject(event) {
+      event.preventDefault();
+      const roots = document.getElementById("newProjectRoots").value.split("\n").map(value => value.trim()).filter(Boolean);
+      try {
+        const project = await api("/api/workspace/projects", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ name: document.getElementById("newProjectName").value.trim(), root_paths: roots, description: document.getElementById("newProjectDescription").value.trim() }),
+        });
+        closeModal("projectModal"); event.target.reset(); toast("项目已创建"); await loadWorkspace(project.project_id);
+      } catch (error) { toast(error.message, "error"); }
+    }
+
+    async function createWorkItem(event) {
+      event.preventDefault();
+      try {
+        await api("/api/workspace/work-items", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ project_id: selectedProject.project_id, title: document.getElementById("newWorkItemTitle").value.trim(), item_type: document.getElementById("newWorkItemType").value, goal: document.getElementById("newWorkItemGoal").value.trim(), priority: document.getElementById("newWorkItemPriority").value, deadline: document.getElementById("newWorkItemDeadline").value || null }),
+        });
+        closeModal("workItemModal"); event.target.reset(); toast("工作项已创建"); await loadWorkspace(selectedProject.project_id);
+      } catch (error) { toast(error.message, "error"); }
+    }
+
+    async function confirmItem(id) {
+      try { await api(`/api/workspace/work-items/${encodeURIComponent(id)}/confirm`, {method:"POST"}); toast("工作项已确认并加入待办"); await loadWorkspace(selectedProject.project_id); }
+      catch (error) { toast(error.message, "error"); }
+    }
+    async function ignoreItem(id) {
+      const reason = prompt("忽略原因（可留空）：", ""); if (reason === null) return;
+      try { await api(`/api/workspace/work-items/${encodeURIComponent(id)}/ignore`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({reason})}); toast("已移入已忽略工作项"); await loadWorkspace(selectedProject.project_id); }
+      catch (error) { toast(error.message, "error"); }
+    }
+    async function restoreItem(id) {
+      try { await api(`/api/workspace/work-items/${encodeURIComponent(id)}/restore`, {method:"POST"}); toast("已恢复到待确认"); await loadWorkspace(selectedProject.project_id); }
+      catch (error) { toast(error.message, "error"); }
+    }
+
+    function openCompleteWorkItemModal(id) {
+      const item = workItems.find(candidate => candidate.work_item_id === id);
+      if (!item) return toast("工作项不存在", "error");
+      completingWorkItemId = id;
+      document.getElementById("completeWorkItemTitle").textContent = item.title;
+      document.getElementById("completionNote").value = "";
+      document.getElementById("acceptanceResult").value = "";
+      openModal("completeWorkItemModal");
+    }
+
+    async function completeWorkItem(event) {
+      event.preventDefault();
+      if (!completingWorkItemId) return toast("请选择要完成的工作项", "error");
+      try {
+        await api(`/api/workspace/work-items/${encodeURIComponent(completingWorkItemId)}/complete`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({
+            completion_note:document.getElementById("completionNote").value.trim(),
+            acceptance_result:document.getElementById("acceptanceResult").value.trim(),
+          }),
+        });
+        closeModal("completeWorkItemModal"); completingWorkItemId = null;
+        toast("工作项已标记完成并移入已完成"); await loadWorkspace(selectedProject.project_id);
+      } catch (error) { toast(error.message, "error"); }
+    }
+
+    async function reopenWorkItem(id) {
+      if (!confirm("要将这个工作项恢复为进行中吗？完成说明会保留在历史记录中。")) return;
+      try {
+        await api(`/api/workspace/work-items/${encodeURIComponent(id)}/reopen`, {method:"POST"});
+        toast("工作项已恢复为进行中"); await loadWorkspace(selectedProject.project_id);
+      } catch (error) { toast(error.message, "error"); }
+    }
+
+    async function launchWorkspaceProject(action) {
+      if (!selectedProject) return;
+      closeProjectOpenMenu();
+      try { const data = await api(`/api/workspace/projects/${encodeURIComponent(selectedProject.project_id)}/launch`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action})}); toast(`已使用 ${data.tool_name} 打开项目`); }
+      catch (error) { toast(error.message, "error"); }
+    }
+
+    function toggleProjectOpenMenu() {
+      const menu = document.getElementById("projectOpenMenu");
+      const button = document.getElementById("projectOpenMenuButton");
+      const willOpen = menu.hidden;
+      menu.hidden = !willOpen;
+      button.setAttribute("aria-expanded", String(willOpen));
+    }
+
+    function closeProjectOpenMenu() {
+      const menu = document.getElementById("projectOpenMenu");
+      const button = document.getElementById("projectOpenMenuButton");
+      if (!menu || menu.hidden) return;
+      menu.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+    }
+
+    function setWorkItemFilter(filter) {
+      const button = document.querySelector(`#workItemTabs button[data-filter="${filter}"]`);
+      if (!button) return;
+      currentFilter = filter;
+      selectedMergeItems.clear();
+      document.querySelectorAll("#workItemTabs button").forEach(item => item.classList.toggle("active", item === button));
+      renderWorkItems();
+    }
+
+    document.getElementById("workItemTabs").addEventListener("click", event => {
+      const button = event.target.closest("button[data-filter]"); if (!button) return;
+      setWorkItemFilter(button.dataset.filter);
+    });
+    document.addEventListener("click", event => {
+      if (!event.target.closest(".workspace-project-open-menu")) closeProjectOpenMenu();
+    });
+    document.addEventListener("keydown", event => { if (event.key === "Escape") closeProjectOpenMenu(); });
+    document.querySelectorAll(".workspace-modal").forEach(modal => modal.addEventListener("click", event => { if (event.target === modal) modal.hidden = true; }));
+    refreshTopbarAMDStatus();
+    loadWorkspace();
+  </script>
+</body>
+</html>

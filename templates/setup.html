@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% if is_setup %}初始化{% else %}设置{% endif %} - Work Assistant Agent</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="setup-body">
+  <nav class="navbar">
+    <span class="nav-brand">⚙ Work Assistant Agent</span>
+    {% if not is_setup %}
+    <div class="nav-links">
+      <a href="/" class="nav-link">工作台</a>
+      <a href="/conversations" class="nav-link">会话</a>
+      <a href="/settings" class="nav-link active">设置</a>
+    </div>
+    <div class="nav-actions">
+      <button id="topbarSyncButton" class="topbar-sync" type="button" onclick="syncAllConversations()">↻ 同步</button>
+      <a id="topbarAMDStatus" class="topbar-amd-status" href="#amdSettings" title="AMD 连接配置"><i class="topbar-status-dot"></i><span>AMD 检测中</span></a>
+    </div>
+    {% endif %}
+  </nav>
+
+  <main class="setup-layout">
+    <section class="setup-card">
+      <div class="setup-heading">
+        <span class="setup-kicker">{% if is_setup %}首次启动{% else %}本地配置{% endif %}</span>
+        <h1>{% if is_setup %}初始化工作助手{% else %}设置工作助手{% endif %}</h1>
+        <p>普通配置保存在本机 SQLite，API Key 保存在 Windows Credential Manager，不会写入数据库。</p>
+      </div>
+
+      <div class="setup-section">
+        <h2 id="amdSettings">1. AMD 推理服务</h2>
+        <label class="form-label" for="apiKey">AMD API Key</label>
+        <div class="secret-row">
+          <input id="apiKey" class="form-input" type="password"
+                 placeholder="{% if settings.api_key_configured %}已配置，留空表示保持不变{% else %}请输入 API Key{% endif %}">
+          <button class="btn-secondary" type="button" onclick="toggleSecret()">显示</button>
+        </div>
+        <p class="field-hint">
+          当前状态：{% if settings.api_key_configured %}<span class="ok-text">已配置（{{ settings.api_key_source }}）</span>{% else %}<span class="error-text">未配置</span>{% endif %}
+        </p>
+
+        <div class="form-grid">
+          <div>
+            <label class="form-label" for="baseUrl">API 地址</label>
+            <input id="baseUrl" class="form-input" value="{{ settings.amd_base_url }}">
+          </div>
+          <div>
+            <label class="form-label" for="model">模型名称</label>
+            <div class="model-select-row">
+              <select id="model" class="form-input">
+                <option value="{{ settings.amd_model }}">{{ settings.amd_model }}（当前配置）</option>
+              </select>
+              <button id="modelsBtn" class="btn-secondary" type="button" onclick="discoverModels()">
+                获取可用模型
+              </button>
+            </div>
+            <p class="field-hint">从当前 API 地址读取真实模型 ID，无需手工填写。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="setup-section">
+        <h2>2. 本地项目</h2>
+        <label class="form-label" for="projectPaths">默认项目路径（每行一个）</label>
+        <textarea id="projectPaths" class="form-input form-textarea"
+                  placeholder="C:/workspace/my-backend&#10;C:/workspace/my-frontend">{{ settings.default_project_paths | join('\n') }}</textarea>
+        <p class="field-hint">可以暂时留空；新建任务时仍可在对话中提供项目路径。</p>
+      </div>
+
+      <div class="setup-section">
+        <h2>3. 隐私与运行参数</h2>
+        <div class="privacy-options">
+          <label class="check-row">
+            <input id="sendCommitInfo" type="checkbox" {% if settings.send_commit_info %}checked{% endif %}>
+            <span><strong>发送最近提交信息</strong><small>向 AMD 提供最近一次 commit 的摘要，用于判断工作进度。</small></span>
+          </label>
+          <label class="check-row">
+            <input id="sendDiffSummary" type="checkbox" {% if settings.send_diff_summary %}checked{% endif %}>
+            <span><strong>发送代码变更摘要</strong><small>最多发送经过截断的 diff 摘要，不发送完整代码库。</small></span>
+          </label>
+        </div>
+
+        <label class="form-label" for="timeout">请求超时（秒）</label>
+        <input id="timeout" class="form-input short-input" type="number" min="10" max="900"
+               value="{{ settings.request_timeout_seconds }}">
+      </div>
+
+      {% if not is_setup %}
+      <div class="setup-section">
+        <div class="tool-settings-heading">
+          <div>
+            <h2>4. 编辑器与 AI 工具</h2>
+            <p class="field-hint">用于从项目会话树安全地打开本地项目，不允许网页执行任意命令。</p>
+          </div>
+          <button id="discoverToolsBtn" class="btn-secondary" type="button" onclick="discoverLocalTools()">
+            自动检测
+          </button>
+        </div>
+
+        <label class="form-label" for="preferredEditor">默认编辑器</label>
+        <select id="preferredEditor" class="form-input short-input">
+          <option value="auto" {% if settings.preferred_editor == 'auto' %}selected{% endif %}>自动选择</option>
+          <option value="vscode" {% if settings.preferred_editor == 'vscode' %}selected{% endif %}>VS Code</option>
+          <option value="idea" {% if settings.preferred_editor == 'idea' %}selected{% endif %}>IntelliJ IDEA</option>
+        </select>
+
+        <div class="tool-path-grid">
+          {% for key, label in [('terminal', '终端'), ('vscode', 'VS Code'), ('idea', 'IntelliJ IDEA'), ('codex', 'Codex CLI'), ('claude', 'Claude Code')] %}
+          <label class="tool-path-row" for="tool-{{ key }}">
+            <span>{{ label }}</span>
+            <input id="tool-{{ key }}" class="form-input" data-tool-key="{{ key }}"
+                   value="{{ settings.tool_paths.get(key, '') }}" placeholder="留空则自动检测">
+            <em id="tool-status-{{ key }}">未检测</em>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="config-location">
+        <h3>本地配置位置</h3>
+        <p>普通设置：<code>{{ settings.settings_db_path }}</code></p>
+        <p>任务数据：<code>{{ settings.agent_db_path }}</code></p>
+        <p>对话状态：<code>{{ settings.checkpoint_db_path }}</code></p>
+        <p>会话索引：<code>{{ settings.conversation_db_path }}</code></p>
+        <p>项目与工作项：<code>{{ settings.workspace_db_path }}</code></p>
+        <p>快照目录：<code>{{ settings.snapshot_dir }}</code></p>
+      </div>
+
+      <div id="setupStatus" class="setup-status" style="display:none"></div>
+      <div class="setup-actions">
+        <button id="testBtn" class="btn-secondary" type="button" onclick="testConnection()">测试连接</button>
+        <button id="saveBtn" class="send-btn" type="button" onclick="saveSettings()">
+          {% if is_setup %}保存并开始使用{% else %}保存设置{% endif %}
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const IS_FIRST_SETUP = {{ 'true' if is_setup else 'false' }};
+
+    function payload() {
+      return {
+        api_key: document.getElementById("apiKey").value.trim(),
+        amd_base_url: document.getElementById("baseUrl").value.trim(),
+        amd_model: document.getElementById("model").value.trim(),
+        default_project_paths: document.getElementById("projectPaths").value
+          .split("\n").map(v => v.trim()).filter(Boolean),
+        request_timeout_seconds: Number(document.getElementById("timeout").value),
+        send_diff_summary: document.getElementById("sendDiffSummary").checked,
+        send_commit_info: document.getElementById("sendCommitInfo").checked,
+      };
+    }
+
+    function toolPayload() {
+      const toolPaths = {};
+      document.querySelectorAll("[data-tool-key]").forEach(input => {
+        if (input.value.trim()) toolPaths[input.dataset.toolKey] = input.value.trim();
+      });
+      return {
+        preferred_editor: document.getElementById("preferredEditor")?.value || "auto",
+        tool_paths: toolPaths,
+      };
+    }
+
+    function setStatus(message, kind) {
+      const element = document.getElementById("setupStatus");
+      element.style.display = "block";
+      element.className = "setup-status " + kind;
+      element.textContent = message;
+    }
+
+    function toggleSecret() {
+      const input = document.getElementById("apiKey");
+      input.type = input.type === "password" ? "text" : "password";
+    }
+
+    async function callSetupApi(url, buttonId) {
+      const button = document.getElementById(buttonId);
+      button.disabled = true;
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload()),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "请求失败");
+        return data;
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function testConnection() {
+      setStatus("正在测试 AMD 连接…", "info");
+      try {
+        const data = await callSetupApi("/api/setup/test", "testBtn");
+        setStatus("连接成功，模型响应：" + (data.response || "OK"), "success");
+      } catch (error) {
+        setStatus("连接失败：" + error.message, "error");
+      }
+    }
+
+    async function discoverModels() {
+      const button = document.getElementById("modelsBtn");
+      button.disabled = true;
+      setStatus("正在从 API 获取可用模型…", "info");
+      try {
+        const response = await fetch("/api/setup/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_key: document.getElementById("apiKey").value.trim(),
+            amd_base_url: document.getElementById("baseUrl").value.trim(),
+            request_timeout_seconds: Number(document.getElementById("timeout").value),
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "获取模型失败");
+
+        const select = document.getElementById("model");
+        const previous = select.value;
+        select.innerHTML = "";
+        data.models.forEach(model => {
+          const option = document.createElement("option");
+          option.value = model.id;
+          option.textContent = model.owned_by ? model.id + " · " + model.owned_by : model.id;
+          select.appendChild(option);
+        });
+        if (data.models.some(model => model.id === previous)) select.value = previous;
+        setStatus("已获取 " + data.models.length + " 个模型，请从下拉列表选择。", "success");
+      } catch (error) {
+        setStatus("获取模型失败：" + error.message, "error");
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function discoverLocalTools() {
+      const button = document.getElementById("discoverToolsBtn");
+      if (!button) return;
+      button.disabled = true;
+      setStatus("正在检测本机编辑器与 AI 工具…", "info");
+      try {
+        const response = await fetch("/api/tools/discover", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "检测失败");
+        Object.entries(data.tools).forEach(([key, tool]) => {
+          const input = document.getElementById("tool-" + key);
+          const status = document.getElementById("tool-status-" + key);
+          if (input && tool.available) input.value = tool.path;
+          if (status) {
+            status.textContent = tool.available ? "已找到" : "未找到";
+            status.className = tool.available ? "tool-found" : "tool-missing";
+          }
+        });
+        setStatus("本机工具检测完成，请确认路径后保存设置。", "success");
+      } catch (error) {
+        setStatus("工具检测失败：" + error.message, "error");
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function saveToolSettings() {
+      if (IS_FIRST_SETUP) return;
+      const response = await fetch("/api/tools", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(toolPayload()),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "保存工具配置失败");
+    }
+
+    async function saveSettings() {
+      setStatus("正在保存本地配置…", "info");
+      try {
+        await callSetupApi("/api/setup", "saveBtn");
+        await saveToolSettings();
+        setStatus("配置已保存。", "success");
+        if (IS_FIRST_SETUP) setTimeout(() => { window.location.href = "/"; }, 500);
+      } catch (error) {
+        setStatus("保存失败：" + error.message, "error");
+      }
+    }
+
+    async function refreshTopbarAMDStatus() {
+      const control = document.getElementById("topbarAMDStatus");
+      if (!control) return;
+      try {
+        const response = await fetch("/api/amd/status?force=false");
+        const status = await response.json();
+        const online = response.ok && Boolean(status.online);
+        control.classList.toggle("online", online);
+        control.classList.toggle("offline", !online);
+        control.querySelector("span").textContent = online ? "AMD 在线" : "AMD 离线";
+        control.title = status.message || "AMD 连接配置";
+      } catch (_) {
+        control.classList.add("offline");
+        control.querySelector("span").textContent = "AMD 未连接";
+      }
+    }
+
+    async function syncAllConversations() {
+      const button = document.getElementById("topbarSyncButton");
+      button.disabled = true;
+      button.textContent = "正在同步…";
+      try {
+        const response = await fetch("/api/conversations/sync-all", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "同步失败");
+        setStatus("会话同步完成，项目索引也已更新。", "success");
+      } catch (error) {
+        setStatus("同步失败：" + error.message, "error");
+      } finally {
+        button.disabled = false;
+        button.textContent = "↻ 同步";
+      }
+    }
+
+    refreshTopbarAMDStatus();
+  </script>
+</body>
+</html>

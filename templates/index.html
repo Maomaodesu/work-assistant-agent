@@ -1,0 +1,1175 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>会话 - Work Assistant</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <span class="nav-brand">⚙ Work Assistant Agent</span>
+    <div class="nav-links">
+      <a href="/" class="nav-link">工作台</a>
+      <a href="/conversations" class="nav-link active">会话</a>
+      <a href="/settings" class="nav-link">设置</a>
+    </div>
+    <div class="nav-actions">
+      <button id="topbarSyncButton" class="topbar-sync" type="button" onclick="syncExternalSessions()">↻ 同步</button>
+      <a id="topbarAMDStatus" class="topbar-amd-status" href="/settings#amdSettings" title="查看或修改 AMD 连接配置"><i class="topbar-status-dot"></i><span>AMD 检测中</span></a>
+    </div>
+  </nav>
+
+  <div class="chat-layout">
+    <!-- 侧边栏：快捷操作与项目会话树 -->
+    <aside class="sidebar">
+      <div class="sidebar-primary-actions" hidden>
+        <div class="home-work-context">
+          <label>当前项目<select id="homeProjectSelect" onchange="homeProjectChanged()"><option>正在加载…</option></select></label>
+          <label>当前工作项<select id="homeWorkItemSelect" onchange="homeWorkItemChanged()"><option>请先选择项目</option></select></label>
+          <small id="homeContextHint">项目和工作项决定快捷操作的对象</small>
+        </div>
+        <button class="sidebar-action sidebar-action-primary" onclick="openHomeModal('homeProjectModal')">
+          <span class="sidebar-action-icon">＋</span><span>新建项目</span>
+        </button>
+        <button id="homeNewWorkItemButton" class="sidebar-action" onclick="openHomeWorkItemModal()" disabled>
+          <span class="sidebar-action-icon">◇</span><span>新建工作项</span>
+        </button>
+        <button id="homeContinueButton" class="sidebar-action" onclick="continueSelectedWorkItem()" disabled>
+          <span class="sidebar-action-icon">›</span><span>继续工作项</span>
+        </button>
+        <button id="homeOpenProjectButton" class="sidebar-action" onclick="openSelectedProjectWorkspace()" disabled>
+          <span class="sidebar-action-icon">▰</span><span>打开项目工作台</span>
+        </button>
+      </div>
+
+      <div class="sidebar-divider"></div>
+
+      <div class="conversation-heading">
+        <div><h3>会话资料</h3><small>按项目归类的 Codex 与 Claude 历史</small></div>
+        <button class="icon-btn" title="新建 AMD 辅助对话" onclick="newConversation()">＋</button>
+      </div>
+      <button id="syncSessionsBtn" class="sync-sessions-btn" onclick="syncExternalSessions()" hidden>
+        同步 Claude / Codex
+      </button>
+      <div id="conversationList" class="conversation-list">
+        <p class="conversation-loading">正在加载会话…</p>
+      </div>
+      <section id="amdConnectionCard" class="amd-connection-card status-checking" hidden>
+        <div class="amd-connection-heading">
+          <div><span id="amdStatusDot" class="amd-status-dot"></span><strong id="amdStatusLabel">正在检测 AMD</strong></div>
+          <button id="amdRecheckButton" type="button" onclick="checkAMDConnection(true)" title="重新检测">↻</button>
+        </div>
+        <p id="amdStatusMessage">正在检查 API 服务与模型…</p>
+        <div class="amd-connection-meta">
+          <span id="amdEndpointLabel">—</span>
+          <span id="amdModelLabel">—</span>
+          <span id="amdLatencyLabel"></span>
+        </div>
+        <div class="amd-connection-actions">
+          <button class="amd-config-toggle" type="button" onclick="toggleAMDQuickConfig()">修改连接配置</button>
+          <a href="/settings">完整设置</a>
+        </div>
+        <form id="amdQuickConfig" class="amd-quick-config" hidden onsubmit="saveAMDQuickConfig(event)">
+          <div class="amd-config-row amd-address-row">
+            <select id="amdProtocol" aria-label="协议"><option value="http:">http</option><option value="https:">https</option></select>
+            <input id="amdHost" required placeholder="IP 或域名" aria-label="IP 或域名">
+            <input id="amdPort" inputmode="numeric" pattern="[0-9]*" placeholder="端口" aria-label="端口">
+          </div>
+          <label>API 路径<input id="amdApiPath" required placeholder="/v1"></label>
+          <label>模型<input id="amdQuickModel" required placeholder="模型 ID"></label>
+          <label>API Key<input id="amdQuickApiKey" type="password" autocomplete="new-password" placeholder="留空保持现有密钥"></label>
+          <small id="amdKeyHint"></small>
+          <div class="amd-config-buttons">
+            <button type="button" onclick="toggleAMDQuickConfig(false)">取消</button>
+            <button id="amdSaveButton" type="submit">保存并重新检测</button>
+          </div>
+        </form>
+      </section>
+      <div class="sidebar-footer" hidden>
+        <span id="footerModelStatusDot" class="model-status-dot"></span>
+        <span id="footerModelLabel" title="{{ settings.amd_model }}">AMD · {{ settings.amd_model }}</span>
+        <a href="/settings" title="设置">⚙</a>
+      </div>
+    </aside>
+
+    <!-- 主聊天区 -->
+    <main class="chat-main">
+      <div id="appStatusBanner" class="app-status-banner" style="display:none">
+        <span id="appStatusText"></span>
+        <button type="button" onclick="bootstrapConversations()">重新连接</button>
+      </div>
+      <div id="externalNotice" class="external-session-notice" style="display:none"></div>
+      <div class="chat-messages" id="messages">
+        <div class="message agent-message" id="welcomeMessage">
+          <div class="message-bubble">
+            这里保留你的本地 Claude、Codex 和 AMD 辅助对话。<br><br>
+            你可以：
+            <ul>
+              <li>查看、归档或删除本机同步的历史会话</li>
+              <li>从可续接的 Codex/Claude 会话继续工作</li>
+              <li>新建一条 AMD 辅助对话；项目与工作项请到工作台管理</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-input-area">
+        <div class="thinking-indicator" id="thinking" style="display:none">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span id="thinking-text">思考中...</span>
+        </div>
+        <div class="input-row">
+          <textarea
+            id="userInput"
+            class="chat-input"
+            placeholder="输入消息，Shift+Enter 换行，Enter 发送..."
+            rows="2"
+          ></textarea>
+          <button id="retryBtn" class="retry-btn" style="display:none" onclick="retryLastMessage()">重试</button>
+          <button id="stopBtn" class="stop-btn" style="display:none" onclick="stopGeneration()">停止</button>
+          <button id="sendBtn" class="send-btn" onclick="sendMessage()">发送</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="homeProjectModal" class="workspace-modal" hidden>
+    <form class="workspace-modal-card" onsubmit="createHomeProject(event)">
+      <div class="workspace-modal-heading"><h2>新建项目</h2><button type="button" onclick="closeHomeModal('homeProjectModal')">×</button></div>
+      <label>项目名称<input id="homeProjectName" class="form-input" required maxlength="120" placeholder="例如：quantitativeInvestment"></label>
+      <label>代码目录（每行一个）<textarea id="homeProjectRoots" class="form-input form-textarea" required placeholder="C:/workspace/backend&#10;C:/workspace/frontend"></textarea></label>
+      <label>项目说明<textarea id="homeProjectDescription" class="form-input" rows="3" placeholder="可选"></textarea></label>
+      <div class="workspace-modal-actions"><button type="button" class="btn-secondary" onclick="closeHomeModal('homeProjectModal')">取消</button><button class="send-btn" type="submit">创建项目</button></div>
+    </form>
+  </div>
+
+  <div id="homeWorkItemModal" class="workspace-modal" hidden>
+    <form class="workspace-modal-card" onsubmit="createHomeWorkItem(event)">
+      <div class="workspace-modal-heading"><h2>新建工作项</h2><button type="button" onclick="closeHomeModal('homeWorkItemModal')">×</button></div>
+      <p class="workspace-modal-context">所属项目：<strong id="homeWorkItemProjectName"></strong></p>
+      <div class="form-grid">
+        <label>类型<select id="homeWorkItemType" class="form-input"><option value="feature">Feature</option><option value="function">Function</option><option value="bug">Bug</option><option value="refactor">Refactor</option><option value="maintenance">Maintenance</option><option value="research">Research</option></select></label>
+        <label>优先级<select id="homeWorkItemPriority" class="form-input"><option>P0</option><option selected>P1</option><option>P2</option><option>P3</option></select></label>
+      </div>
+      <label>名称<input id="homeWorkItemTitle" class="form-input" required maxlength="160" placeholder="明确描述要交付的功能或修复"></label>
+      <label>目标<textarea id="homeWorkItemGoal" class="form-input form-textarea" placeholder="这个工作项需要完成什么"></textarea></label>
+      <label>截止日期（可选）<input id="homeWorkItemDeadline" class="form-input short-input" type="date"></label>
+      <div class="workspace-modal-actions"><button type="button" class="btn-secondary" onclick="closeHomeModal('homeWorkItemModal')">取消</button><button class="send-btn" type="submit">创建工作项</button></div>
+    </form>
+  </div>
+
+  <div id="homeContinueModal" class="workspace-modal" hidden>
+    <div class="workspace-modal-card home-continue-card">
+      <div class="workspace-modal-heading"><h2>继续工作项</h2><button type="button" onclick="closeHomeModal('homeContinueModal')">×</button></div>
+      <div id="homeContinueBody"></div>
+    </div>
+  </div>
+
+  <div id="homeActionToast" class="workspace-toast"></div>
+
+  <script src="/static/message_formatter.js"></script>
+  <script>
+    const SESSION_STORAGE_KEY = "work-assistant-session-id";
+    const GROUP_STATE_STORAGE_KEY = "work-assistant-conversation-groups";
+    const WORKSPACE_SELECTED_PROJECT_KEY = "work-assistant-selected-project";
+    const HOME_SELECTED_WORK_ITEM_KEY = "work-assistant-selected-work-item";
+    let SESSION_ID = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!SESSION_ID) {
+      SESSION_ID = "session-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      localStorage.setItem(SESSION_STORAGE_KEY, SESSION_ID);
+    }
+    let ACTIVE_CONVERSATION_ID = SESSION_ID;
+    let currentConversationReadonly = false;
+    let externalConversation = null;
+    let conversationGroupState = loadConversationGroupState();
+    let ACTIVE_REQUEST_ID = null;
+    let ACTIVE_REQUEST_SESSION_ID = null;
+    let ACTIVE_FETCH_CONTROLLER = null;
+    let ACTIVE_REQUEST_KIND = "amd";
+    let LAST_REQUEST_MESSAGE = "";
+    let LOCAL_TOOLS = {};
+    let AMD_CONNECTION_ONLINE = null;
+    let AMD_PUBLIC_SETTINGS = null;
+    let AMD_STATUS_POLL_TIMER = null;
+    let HOME_PROJECTS = [];
+    let HOME_WORK_ITEMS = [];
+    let HOME_CONTINUE_PROMPT = "";
+
+    function loadConversationGroupState() {
+      try {
+        return JSON.parse(localStorage.getItem(GROUP_STATE_STORAGE_KEY) || "{}");
+      } catch (_) {
+        return {};
+      }
+    }
+
+    function saveConversationGroupState() {
+      localStorage.setItem(GROUP_STATE_STORAGE_KEY, JSON.stringify(conversationGroupState));
+    }
+
+    async function workspaceApi(url, options = {}) {
+      const response = await fetchWithTimeout(url, options, 10000);
+      let data = {};
+      try { data = await response.json(); } catch (_) {}
+      if (!response.ok) throw new Error(data.error || `请求失败（HTTP ${response.status}）`);
+      return data;
+    }
+
+    function homeToast(message, kind = "success") {
+      const toast = document.getElementById("homeActionToast");
+      toast.textContent = message;
+      toast.className = "workspace-toast " + kind + " visible";
+      clearTimeout(homeToast.timer);
+      homeToast.timer = setTimeout(() => toast.classList.remove("visible"), 2800);
+    }
+
+    function selectedHomeProject() {
+      const id = document.getElementById("homeProjectSelect").value;
+      return HOME_PROJECTS.find(project => project.project_id === id) || null;
+    }
+
+    function selectedHomeWorkItem() {
+      const id = document.getElementById("homeWorkItemSelect").value;
+      return HOME_WORK_ITEMS.find(item => item.work_item_id === id) || null;
+    }
+
+    function updateHomeActionState() {
+      const project = selectedHomeProject();
+      const item = selectedHomeWorkItem();
+      document.getElementById("homeNewWorkItemButton").disabled = !project;
+      document.getElementById("homeOpenProjectButton").disabled = !project;
+      document.getElementById("homeContinueButton").disabled = !item;
+      document.getElementById("homeContextHint").textContent = project
+        ? (item ? `${item.title} · ${item.status}` : `${project.name} · 请选择工作项`)
+        : "先创建或选择一个项目";
+    }
+
+    async function loadHomeWorkspaceContext(preferredProjectId = null, preferredWorkItemId = null) {
+      const projectSelect = document.getElementById("homeProjectSelect");
+      try {
+        HOME_PROJECTS = await workspaceApi("/api/workspace/overview");
+        if (!HOME_PROJECTS.length) {
+          projectSelect.innerHTML = '<option value="">暂无项目</option>';
+          HOME_WORK_ITEMS = [];
+          renderHomeWorkItems(); updateHomeActionState(); return;
+        }
+        const savedProject = preferredProjectId || localStorage.getItem(WORKSPACE_SELECTED_PROJECT_KEY);
+        const selectedId = HOME_PROJECTS.some(project => project.project_id === savedProject)
+          ? savedProject : HOME_PROJECTS[0].project_id;
+        projectSelect.innerHTML = HOME_PROJECTS.map(project => `<option value="${escapeHtml(project.project_id)}" ${project.project_id === selectedId ? "selected" : ""}>${escapeHtml(project.name)} · ${project.work_item_total} 项</option>`).join("");
+        localStorage.setItem(WORKSPACE_SELECTED_PROJECT_KEY, selectedId);
+        await loadHomeWorkItems(selectedId, preferredWorkItemId);
+      } catch (error) {
+        projectSelect.innerHTML = '<option value="">项目加载失败</option>';
+        homeToast(error.message, "error"); updateHomeActionState();
+      }
+    }
+
+    async function loadHomeWorkItems(projectId, preferredWorkItemId = null) {
+      if (!projectId) { HOME_WORK_ITEMS = []; renderHomeWorkItems(); return; }
+      const allItems = await workspaceApi(`/api/workspace/work-items?project_id=${encodeURIComponent(projectId)}&include_ignored=true`);
+      HOME_WORK_ITEMS = allItems.filter(item => !["ignored", "archived", "completed"].includes(item.status));
+      renderHomeWorkItems(preferredWorkItemId);
+    }
+
+    function renderHomeWorkItems(preferredWorkItemId = null) {
+      const select = document.getElementById("homeWorkItemSelect");
+      if (!HOME_WORK_ITEMS.length) {
+        select.innerHTML = '<option value="">暂无可继续的工作项</option>';
+        select.disabled = true; updateHomeActionState(); return;
+      }
+      const savedItem = preferredWorkItemId || localStorage.getItem(HOME_SELECTED_WORK_ITEM_KEY);
+      const selectedId = HOME_WORK_ITEMS.some(item => item.work_item_id === savedItem)
+        ? savedItem : HOME_WORK_ITEMS[0].work_item_id;
+      select.disabled = false;
+      select.innerHTML = HOME_WORK_ITEMS.map(item => `<option value="${escapeHtml(item.work_item_id)}" ${item.work_item_id === selectedId ? "selected" : ""}>${escapeHtml(item.title)} · ${item.status === "suggested" ? "待确认" : item.status}</option>`).join("");
+      localStorage.setItem(HOME_SELECTED_WORK_ITEM_KEY, selectedId);
+      updateHomeActionState();
+    }
+
+    async function homeProjectChanged() {
+      const project = selectedHomeProject();
+      if (!project) return updateHomeActionState();
+      localStorage.setItem(WORKSPACE_SELECTED_PROJECT_KEY, project.project_id);
+      localStorage.removeItem(HOME_SELECTED_WORK_ITEM_KEY);
+      try { await loadHomeWorkItems(project.project_id); }
+      catch (error) { homeToast(error.message, "error"); }
+    }
+
+    function homeWorkItemChanged() {
+      const item = selectedHomeWorkItem();
+      if (item) localStorage.setItem(HOME_SELECTED_WORK_ITEM_KEY, item.work_item_id);
+      updateHomeActionState();
+    }
+
+    function openHomeModal(id) { document.getElementById(id).hidden = false; }
+    function closeHomeModal(id) { document.getElementById(id).hidden = true; }
+
+    async function createHomeProject(event) {
+      event.preventDefault();
+      const roots = document.getElementById("homeProjectRoots").value.split("\n").map(value => value.trim()).filter(Boolean);
+      try {
+        const project = await workspaceApi("/api/workspace/projects", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({name:document.getElementById("homeProjectName").value.trim(), root_paths:roots, description:document.getElementById("homeProjectDescription").value.trim()})
+        });
+        event.target.reset(); closeHomeModal("homeProjectModal");
+        await loadHomeWorkspaceContext(project.project_id); homeToast("项目已创建");
+      } catch (error) { homeToast(error.message, "error"); }
+    }
+
+    function openHomeWorkItemModal() {
+      const project = selectedHomeProject();
+      if (!project) return homeToast("请先选择项目", "error");
+      document.getElementById("homeWorkItemProjectName").textContent = project.name;
+      openHomeModal("homeWorkItemModal");
+    }
+
+    async function createHomeWorkItem(event) {
+      event.preventDefault();
+      const project = selectedHomeProject();
+      if (!project) return homeToast("请先选择项目", "error");
+      try {
+        const item = await workspaceApi("/api/workspace/work-items", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({project_id:project.project_id, title:document.getElementById("homeWorkItemTitle").value.trim(), item_type:document.getElementById("homeWorkItemType").value, goal:document.getElementById("homeWorkItemGoal").value.trim(), priority:document.getElementById("homeWorkItemPriority").value, deadline:document.getElementById("homeWorkItemDeadline").value || null})
+        });
+        event.target.reset(); closeHomeModal("homeWorkItemModal");
+        await loadHomeWorkspaceContext(project.project_id, item.work_item_id); homeToast("工作项已创建");
+      } catch (error) { homeToast(error.message, "error"); }
+    }
+
+    function openSelectedProjectWorkspace() {
+      const project = selectedHomeProject();
+      if (!project) return homeToast("请先选择项目", "error");
+      localStorage.setItem(WORKSPACE_SELECTED_PROJECT_KEY, project.project_id);
+      window.location.href = "/workspace";
+    }
+
+    async function continueSelectedWorkItem() {
+      const project = selectedHomeProject();
+      const item = selectedHomeWorkItem();
+      if (!project || !item) return homeToast("请先选择工作项", "error");
+      const body = document.getElementById("homeContinueBody");
+      body.innerHTML = '<p class="conversation-loading">正在整理本地上下文与来源会话…</p>';
+      openHomeModal("homeContinueModal");
+      try {
+        const promptResult = await workspaceApi(
+          `/api/workspace/work-items/${encodeURIComponent(item.work_item_id)}/continue-prompt`, {method:"POST"}
+        );
+        HOME_CONTINUE_PROMPT = promptResult.prompt || "";
+        let copied = false;
+        try {
+          await navigator.clipboard.writeText(HOME_CONTINUE_PROMPT);
+          copied = true;
+        } catch (_) { /* 弹窗保留手动复制入口。 */ }
+        body.innerHTML = `<div class="home-continue-heading"><span>${escapeHtml(project.name)}</span><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.goal || item.description || "尚未补充工作项目标")}</p></div>
+          <p class="workspace-modal-context">${copied ? "续接提示词已自动复制。" : "浏览器未允许自动复制，请点击下方按钮复制。"} 在 ChatGPT App 中切换到 Codex，打开同一项目后新建对话并粘贴；它会先读取脱敏交接文件。</p>
+          <p class="workspace-modal-context">${promptResult.handoff_available ? `交接文件：${escapeHtml(promptResult.handoff_path)}` : escapeHtml(promptResult.handoff_error || "项目内交接文件不可用，请直接使用已复制的完整提示词。")}</p>
+          <div class="home-continue-actions"><button class="send-btn" onclick="copyHomeContinuePrompt()">复制到 ChatGPT Codex</button><button onclick="openSelectedProjectWorkspace()">查看来源片段</button></div>`;
+        if (copied) homeToast("已生成并复制提示词。请在 ChatGPT App 的 Codex 新建对话后粘贴。");
+      } catch (error) { body.innerHTML = `<p class="error-text">${escapeHtml(error.message)}</p>`; }
+    }
+
+    async function copyHomeContinuePrompt() {
+      if (!HOME_CONTINUE_PROMPT.trim()) return homeToast("没有可复制的提示词", "error");
+      try {
+        await navigator.clipboard.writeText(HOME_CONTINUE_PROMPT);
+        homeToast("已复制提示词，可粘贴到 ChatGPT App 的 Codex 新对话。");
+      } catch (_) { homeToast("复制失败，请在工作台中查看并手动复制提示词", "error"); }
+    }
+
+    async function launchHomeAITool(action) {
+      const project = selectedHomeProject();
+      if (!project) return;
+      try {
+        const result = await workspaceApi(`/api/workspace/projects/${encodeURIComponent(project.project_id)}/launch`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action})});
+        closeHomeModal("homeContinueModal"); homeToast(`已使用 ${result.tool_name} 打开项目`);
+      } catch (error) { homeToast(error.message, "error"); }
+    }
+
+    function welcomeHtml() {
+      return `你好！我是你的开发工作助手。左侧可以直接选择项目和工作项。<br><br>
+        你可以：
+        <ul>
+          <li>新建项目或具体 Feature、Bug、重构工作项</li>
+          <li>从已有 Codex/Claude 来源会话继续工作</li>
+          <li>在聊天中讨论当前开发问题</li>
+        </ul>`;
+    }
+
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } catch (error) {
+        if (error.name === "AbortError") throw new Error("连接后端超时");
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    function showConnectionError(message) {
+      const banner = document.getElementById("appStatusBanner");
+      document.getElementById("appStatusText").textContent =
+        "无法连接本地服务：" + message + "。请确认 server.py 正在运行。";
+      banner.style.display = "flex";
+      document.getElementById("conversationList").innerHTML =
+        '<p class="conversation-loading error-text">会话加载失败，请重新连接</p>';
+    }
+
+    function clearConnectionError() {
+      document.getElementById("appStatusBanner").style.display = "none";
+    }
+
+    function populateAMDQuickConfig(settings) {
+      AMD_PUBLIC_SETTINGS = settings;
+      try {
+        const endpoint = new URL(settings.amd_base_url);
+        document.getElementById("amdProtocol").value = endpoint.protocol;
+        document.getElementById("amdHost").value = endpoint.hostname;
+        document.getElementById("amdPort").value = endpoint.port;
+        document.getElementById("amdApiPath").value = endpoint.pathname.replace(/\/$/, "") || "/v1";
+      } catch (_) {
+        document.getElementById("amdProtocol").value = "http:";
+        document.getElementById("amdHost").value = "";
+        document.getElementById("amdPort").value = "";
+        document.getElementById("amdApiPath").value = "/v1";
+      }
+      document.getElementById("amdQuickModel").value = settings.amd_model || "";
+      document.getElementById("amdQuickApiKey").value = "";
+      document.getElementById("amdKeyHint").textContent = settings.api_key_configured
+        ? `已配置密钥（${settings.api_key_source}），留空不会覆盖`
+        : "尚未配置 API Key";
+    }
+
+    function setAMDChecking() {
+      const card = document.getElementById("amdConnectionCard");
+      card.className = "amd-connection-card status-checking";
+      document.getElementById("amdStatusLabel").textContent = "正在检测 AMD";
+      document.getElementById("amdStatusMessage").textContent = "正在检查 API 服务与模型…";
+      document.getElementById("amdRecheckButton").disabled = true;
+    }
+
+    function applyAMDAvailability() {
+      const sendButton = document.getElementById("sendBtn");
+      if (!ACTIVE_REQUEST_ID) sendButton.disabled = !externalConversation && AMD_CONNECTION_ONLINE === false;
+      sendButton.title = !externalConversation && AMD_CONNECTION_ONLINE === false
+        ? "AMD 服务离线，请先修改连接配置" : "";
+    }
+
+    function renderAMDStatus(status) {
+      const card = document.getElementById("amdConnectionCard");
+      const normalized = status.status || "error";
+      card.className = "amd-connection-card status-" + normalized;
+      AMD_CONNECTION_ONLINE = Boolean(status.online);
+      document.getElementById("amdStatusLabel").textContent = status.online ? "AMD 在线" : ({
+        timeout:"连接超时", offline:"服务器离线", unauthorized:"密钥无效",
+        not_configured:"尚未配置", model_missing:"模型不可用", error:"检测失败"
+      }[normalized] || "AMD 不可用");
+      document.getElementById("amdStatusMessage").textContent = status.message || status.error || "检测失败";
+      document.getElementById("amdEndpointLabel").textContent = status.base_url || AMD_PUBLIC_SETTINGS?.amd_base_url || "—";
+      document.getElementById("amdEndpointLabel").title = status.base_url || "";
+      document.getElementById("amdModelLabel").textContent = status.model || AMD_PUBLIC_SETTINGS?.amd_model || "—";
+      document.getElementById("amdModelLabel").title = status.model || "";
+      document.getElementById("amdLatencyLabel").textContent = Number.isFinite(status.latency_ms) ? `${status.latency_ms} ms` : "";
+      document.getElementById("amdRecheckButton").disabled = false;
+      const footerDot = document.getElementById("footerModelStatusDot");
+      footerDot.className = "model-status-dot " + (status.online ? "online" : "offline");
+      document.getElementById("footerModelLabel").textContent = `AMD · ${status.model || AMD_PUBLIC_SETTINGS?.amd_model || "未配置"}`;
+      applyAMDAvailability();
+    }
+
+    async function checkAMDConnection(force = false) {
+      setAMDChecking();
+      try {
+        const response = await fetchWithTimeout(`/api/amd/status?force=${force ? "true" : "false"}`, {}, 12000);
+        const status = await response.json();
+        if (!response.ok) throw new Error(status.error || `HTTP ${response.status}`);
+        renderAMDStatus(status);
+      } catch (error) {
+        renderAMDStatus({
+          online:false, status:error.message?.includes("超时") ? "timeout" : "error",
+          message:"无法完成 AMD 状态检测", error:error.message,
+          base_url:AMD_PUBLIC_SETTINGS?.amd_base_url, model:AMD_PUBLIC_SETTINGS?.amd_model
+        });
+      }
+    }
+
+    function toggleAMDQuickConfig(force) {
+      const form = document.getElementById("amdQuickConfig");
+      form.hidden = typeof force === "boolean" ? !force : !form.hidden;
+      if (!form.hidden) document.getElementById("amdHost").focus();
+    }
+
+    async function saveAMDQuickConfig(event) {
+      event.preventDefault();
+      const port = document.getElementById("amdPort").value.trim();
+      if (port && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)) {
+        return alert("端口必须是 1–65535 之间的整数");
+      }
+      const path = "/" + document.getElementById("amdApiPath").value.trim().replace(/^\/+/, "");
+      const baseUrl = document.getElementById("amdProtocol").value + "//" +
+        document.getElementById("amdHost").value.trim() + (port ? ":" + port : "") + path;
+      const button = document.getElementById("amdSaveButton");
+      button.disabled = true; button.textContent = "正在保存并检测…";
+      setAMDChecking();
+      try {
+        const response = await fetchWithTimeout("/api/amd/config", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({
+            amd_base_url:baseUrl,
+            amd_model:document.getElementById("amdQuickModel").value.trim(),
+            api_key:document.getElementById("amdQuickApiKey").value.trim()
+          })
+        }, 15000);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        populateAMDQuickConfig(data.settings);
+        renderAMDStatus(data.health);
+        if (data.health.online) toggleAMDQuickConfig(false);
+      } catch (error) {
+        renderAMDStatus({
+          online:false, status:"error", message:"配置保存或连接检测失败：" + error.message,
+          base_url:baseUrl, model:document.getElementById("amdQuickModel").value.trim()
+        });
+      } finally {
+        button.disabled = false; button.textContent = "保存并重新检测";
+      }
+    }
+
+    async function loadAMDConnectionPanel() {
+      try {
+        const response = await fetchWithTimeout("/api/settings", {}, 5000);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        populateAMDQuickConfig(await response.json());
+      } catch (_) {}
+      await checkAMDConnection(false);
+      clearInterval(AMD_STATUS_POLL_TIMER);
+      AMD_STATUS_POLL_TIMER = setInterval(() => checkAMDConnection(false), 60000);
+    }
+
+    async function ensureCurrentConversation() {
+      const response = await fetchWithTimeout("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: SESSION_ID, title: "新对话" }),
+      });
+      if (!response.ok) throw new Error(`初始化会话失败（HTTP ${response.status}）`);
+    }
+
+    async function loadConversations() {
+      const response = await fetchWithTimeout("/api/conversations");
+      if (!response.ok) throw new Error(`加载会话失败（HTTP ${response.status}）`);
+      const conversations = await response.json();
+      const list = document.getElementById("conversationList");
+      list.innerHTML = "";
+
+      function renderConversation(item) {
+        const row = document.createElement("div");
+        row.className = "conversation-item" + (item.id === ACTIVE_CONVERSATION_ID ? " active" : "");
+        row.onclick = () => selectConversation(item.id);
+
+        const sourceLabel = item.source === "work_assistant" ? "WA" : item.source === "claude" ? "Claude" : "Codex";
+        const safeJsId = escapeHtml(escapeJs(item.id));
+        const safeJsTitle = escapeHtml(escapeJs(item.title));
+        const archiveTitle = item.archived ? "恢复" : "归档";
+        const archiveIcon = item.archived ? "↥" : "▣";
+        const updatedAt = formatConversationTime(item.updated_at);
+        row.innerHTML = `
+          <div class="conversation-main">
+            <span class="conversation-title">${escapeHtml(item.title)}</span>
+            <span class="conversation-meta">
+              <b class="source-${item.source}">${sourceLabel}</b>
+              <time datetime="${escapeHtml(item.updated_at || "")}">${updatedAt}</time>
+            </span>
+          </div>
+          <div class="conversation-actions">
+            <button title="重命名" onclick="event.stopPropagation(); renameConversation('${safeJsId}', '${safeJsTitle}')">✎</button>
+            <button title="${archiveTitle}" onclick="event.stopPropagation(); archiveConversation('${safeJsId}', ${!item.archived})">${archiveIcon}</button>
+            <button title="删除" onclick="event.stopPropagation(); deleteConversation('${safeJsId}')">×</button>
+          </div>`;
+        return row;
+      }
+
+      function renderGroup(groupKey, title, items, path, defaultExpanded = false) {
+        if (!items.length) return;
+        items.sort((a, b) => conversationTimestamp(b) - conversationTimestamp(a));
+        const containsActiveConversation = items.some(item => item.id === ACTIVE_CONVERSATION_ID);
+        const isExpanded = groupKey in conversationGroupState
+          ? conversationGroupState[groupKey]
+          : containsActiveConversation || defaultExpanded;
+        const section = document.createElement("section");
+        section.className = "conversation-group " + (isExpanded ? "expanded" : "collapsed");
+        const heading = document.createElement("button");
+        heading.type = "button";
+        heading.className = "conversation-group-title";
+        heading.title = path || "";
+        heading.setAttribute("aria-expanded", String(isExpanded));
+        const groupIcon = groupKey.startsWith("project:") ? "▰" : groupKey === "archived" ? "⌑" : "◇";
+        heading.innerHTML = `
+          <span class="conversation-group-label">
+            <i class="conversation-group-chevron">›</i>
+            <i class="conversation-group-icon">${groupIcon}</i>
+            <span>${escapeHtml(title)}</span>
+          </span>
+          <em>${items.length}</em>`;
+        heading.onclick = () => toggleConversationGroup(section, heading, groupKey);
+        const headingRow = document.createElement("div");
+        headingRow.className = "conversation-group-heading-row";
+        headingRow.appendChild(heading);
+        if (groupKey.startsWith("project:")) {
+          const launchButton = document.createElement("button");
+          launchButton.type = "button";
+          launchButton.className = "project-launch-toggle";
+          launchButton.title = "打开项目工作台";
+          launchButton.textContent = "•••";
+          const menu = buildProjectLaunchMenu(groupKey.slice("project:".length), path);
+          launchButton.onclick = event => {
+            event.stopPropagation();
+            document.querySelectorAll(".project-launch-menu.open").forEach(item => {
+              if (item !== menu) item.classList.remove("open");
+            });
+            menu.classList.toggle("open");
+          };
+          headingRow.appendChild(launchButton);
+          section.appendChild(headingRow);
+          section.appendChild(menu);
+        } else {
+          section.appendChild(headingRow);
+        }
+        const children = document.createElement("div");
+        children.className = "conversation-group-children";
+        items.forEach(item => children.appendChild(renderConversation(item)));
+        section.appendChild(children);
+        list.appendChild(section);
+      }
+
+      const active = conversations.filter(item => !item.archived);
+      const projects = new Map();
+      active.filter(item => item.group_type === "project").forEach(item => {
+        const key = item.project_key || item.project_path;
+        if (!projects.has(key)) projects.set(key, []);
+        projects.get(key).push(item);
+      });
+      [...projects.entries()]
+        .map(([key, items]) => [key, items.sort((a, b) => conversationTimestamp(b) - conversationTimestamp(a))])
+        .sort(([, a], [, b]) => conversationTimestamp(b[0]) - conversationTimestamp(a[0]))
+        .forEach(([key, items]) => renderGroup(
+          "project:" + key,
+          items[0].project_name || "未命名项目",
+          items,
+          items[0].project_path
+        ));
+
+      renderGroup("casual", "随意会话", active.filter(item => item.group_type !== "project"), "", true);
+      renderGroup("archived", "已归档", conversations.filter(item => item.archived));
+      if (!conversations.length) list.innerHTML = '<p class="conversation-loading">暂无会话</p>';
+    }
+
+    function toolIsAvailable(action) {
+      if (action === "explorer") return true;
+      if (action === "default_editor") {
+        return Boolean(LOCAL_TOOLS.vscode?.available || LOCAL_TOOLS.idea?.available);
+      }
+      return Boolean(LOCAL_TOOLS[action]?.available);
+    }
+
+    function buildProjectLaunchMenu(projectKey, projectPath) {
+      const menu = document.createElement("div");
+      menu.className = "project-launch-menu";
+      const pathLabel = document.createElement("div");
+      pathLabel.className = "project-launch-path";
+      pathLabel.textContent = projectPath || "项目工作台";
+      pathLabel.title = projectPath || "";
+      menu.appendChild(pathLabel);
+
+      const actions = [
+        ["explorer", "▣", "资源管理器"],
+        ["terminal", ">_", "打开终端"],
+        ["default_editor", "◆", "默认编辑器"],
+        ["vscode", "VS", "VS Code"],
+        ["idea", "IJ", "IntelliJ IDEA"],
+        ["codex", "CX", "使用 Codex"],
+        ["claude", "CL", "使用 Claude"],
+      ];
+      actions.forEach(([action, icon, label]) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "project-launch-action";
+        button.disabled = !toolIsAvailable(action);
+        button.innerHTML = `<i>${icon}</i><span>${label}</span>`;
+        if (button.disabled) button.title = "未检测到该工具，请先到设置页配置";
+        button.onclick = event => {
+          event.stopPropagation();
+          launchProjectTool(projectKey, action, button, menu);
+        };
+        menu.appendChild(button);
+      });
+      const settingsLink = document.createElement("a");
+      settingsLink.href = "/settings";
+      settingsLink.className = "project-launch-settings";
+      settingsLink.textContent = "配置本地工具 →";
+      menu.appendChild(settingsLink);
+      return menu;
+    }
+
+    async function loadToolAvailability() {
+      try {
+        const response = await fetchWithTimeout("/api/tools", {}, 4000);
+        if (!response.ok) return;
+        const data = await response.json();
+        LOCAL_TOOLS = data.tools || {};
+      } catch (_) {
+        LOCAL_TOOLS = {};
+      }
+    }
+
+    function showWorkspaceToast(message, kind = "success") {
+      let toast = document.getElementById("workspaceToast");
+      if (!toast) {
+        toast = document.createElement("div");
+        toast.id = "workspaceToast";
+        document.body.appendChild(toast);
+      }
+      toast.className = "workspace-toast " + kind + " visible";
+      toast.textContent = message;
+      clearTimeout(showWorkspaceToast.timer);
+      showWorkspaceToast.timer = setTimeout(() => toast.classList.remove("visible"), 2800);
+    }
+
+    async function launchProjectTool(projectKey, action, button, menu) {
+      button.disabled = true;
+      const previous = button.querySelector("span").textContent;
+      button.querySelector("span").textContent = "正在打开…";
+      try {
+        const response = await fetch("/api/projects/launch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project_key: projectKey, action }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "启动失败");
+        menu.classList.remove("open");
+        showWorkspaceToast(`已使用 ${data.tool_name} 打开 ${data.project_path}`);
+      } catch (error) {
+        showWorkspaceToast(error.message || String(error), "error");
+      } finally {
+        button.querySelector("span").textContent = previous;
+        button.disabled = !toolIsAvailable(action);
+      }
+    }
+
+    function conversationTimestamp(item) {
+      const value = Date.parse(item.updated_at || item.created_at || "");
+      return Number.isNaN(value) ? 0 : value;
+    }
+
+    function formatConversationTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const targetDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const dayDifference = Math.round((today - targetDay) / 86400000);
+      if (dayDifference === 0) return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+      if (dayDifference === 1) return "昨天";
+      if (date.getFullYear() === now.getFullYear()) {
+        return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+      }
+      return date.toLocaleDateString("zh-CN", { year: "2-digit", month: "numeric", day: "numeric" });
+    }
+
+    function toggleConversationGroup(section, heading, groupKey) {
+      const expanded = section.classList.contains("expanded");
+      section.classList.toggle("expanded", !expanded);
+      section.classList.toggle("collapsed", expanded);
+      heading.setAttribute("aria-expanded", String(!expanded));
+      conversationGroupState[groupKey] = !expanded;
+      saveConversationGroupState();
+    }
+
+    async function loadConversationMessages(conversationId) {
+      const response = await fetchWithTimeout(
+        "/api/conversations/" + encodeURIComponent(conversationId) + "/messages"
+      );
+      if (!response.ok) throw new Error(`加载消息失败（HTTP ${response.status}）`);
+      const data = await response.json();
+      const conversation = data.conversation;
+      ACTIVE_CONVERSATION_ID = conversation.id;
+      currentConversationReadonly = conversation.readonly || conversation.archived;
+      const bridgeSupported = conversation.readonly && !conversation.archived &&
+        ["codex", "claude"].includes(conversation.source) && Boolean(conversation.project_path);
+      externalConversation = bridgeSupported ? conversation : null;
+
+      if (!conversation.readonly && !conversation.archived) {
+        SESSION_ID = conversation.id;
+        localStorage.setItem(SESSION_STORAGE_KEY, SESSION_ID);
+      }
+
+      const notice = document.getElementById("externalNotice");
+      const input = document.getElementById("userInput");
+      const sendButton = document.getElementById("sendBtn");
+      if (conversation.archived) {
+        notice.style.display = "block";
+        notice.textContent = "这是已归档会话。恢复后才能继续发送消息。";
+        input.disabled = true;
+        sendButton.disabled = true;
+        input.placeholder = "已归档会话为只读模式";
+      } else if (conversation.readonly) {
+        notice.style.display = "block";
+        if (bridgeSupported) {
+          notice.textContent = "这是从 " + conversation.source.toUpperCase() + " 导入的本地会话" +
+            " · 网页输入会直接续接原会话；原始记录由 CLI 自己保存。";
+          input.disabled = false;
+          sendButton.disabled = false;
+          input.placeholder = "向本机 " + conversation.source.toUpperCase() + " 会话发送消息…";
+        } else {
+          notice.textContent = "这是从 " + conversation.source.toUpperCase() + " 导入的只读会话" +
+            (conversation.project_path ? " · " + conversation.project_path : "") + "。该会话缺少可用的本地项目目录。";
+          input.disabled = true;
+          sendButton.disabled = true;
+          input.placeholder = "外部会话为只读模式";
+        }
+      } else {
+        notice.style.display = "none";
+        input.disabled = false;
+        sendButton.disabled = false;
+        input.placeholder = "输入消息，Shift+Enter 换行，Enter 发送...";
+      }
+
+      const container = document.getElementById("messages");
+      container.innerHTML = "";
+      if (!data.messages.length) {
+        const welcome = appendMessage("agent", welcomeHtml());
+        welcome.id = "welcomeMessage";
+      } else {
+        data.messages.forEach(message => {
+          const html = message.role === "assistant"
+            ? formatAgentText(message.content)
+            : escapeHtml(message.content).replace(/\n/g, "<br>");
+          appendMessage(message.role === "assistant" ? "agent" : "user", html);
+        });
+      }
+      await loadConversations();
+    }
+
+    async function selectConversation(conversationId) {
+      if (ACTIVE_REQUEST_ID) {
+        setThinking(true, "请先停止当前生成，再切换会话");
+        return;
+      }
+      try {
+        await loadConversationMessages(conversationId);
+        clearConnectionError();
+      } catch (error) {
+        showConnectionError(error.message || String(error));
+      }
+    }
+
+    async function newConversation() {
+      if (ACTIVE_REQUEST_ID) {
+        setThinking(true, "请先停止当前生成，再新建会话");
+        return;
+      }
+      const id = "session-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      const response = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: id, title: "新对话" }),
+      });
+      if (!response.ok) return;
+      SESSION_ID = id;
+      ACTIVE_CONVERSATION_ID = id;
+      localStorage.setItem(SESSION_STORAGE_KEY, id);
+      await loadConversationMessages(id);
+    }
+
+    async function renameConversation(id, oldTitle) {
+      const title = prompt("新的会话名称：", oldTitle);
+      if (!title || title.trim() === oldTitle) return;
+      await fetch("/api/conversations/" + encodeURIComponent(id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title.trim() }),
+      });
+      await loadConversations();
+    }
+
+    async function archiveConversation(id, archived) {
+      const response = await fetch("/api/conversations/" + encodeURIComponent(id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived }),
+      });
+      if (!response.ok) return;
+      if (id === ACTIVE_CONVERSATION_ID) await loadConversationMessages(id);
+      else await loadConversations();
+    }
+
+    async function deleteConversation(id) {
+      if (!confirm("删除这个会话？外部 Claude/Codex 原始文件不会被删除。")) return;
+      const response = await fetch("/api/conversations/" + encodeURIComponent(id), { method: "DELETE" });
+      if (!response.ok) return;
+      if (id === ACTIVE_CONVERSATION_ID) await newConversation();
+      else await loadConversations();
+    }
+
+    async function syncExternalSessions() {
+      const button = document.getElementById("topbarSyncButton") || document.getElementById("syncSessionsBtn");
+      button.disabled = true;
+      button.textContent = "正在同步…";
+      try {
+        const response = await fetch("/api/conversations/sync-all", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "同步失败");
+        const conversations = data.conversations || {};
+        button.textContent = `已同步 Claude ${conversations.claude || 0} / Codex ${conversations.codex || 0}`;
+        await loadConversations();
+      } catch (error) {
+        button.textContent = "同步失败，点击重试";
+      } finally {
+        button.disabled = false;
+        setTimeout(() => { button.textContent = "↻ 同步"; }, 2500);
+      }
+    }
+
+    async function refreshTopbarAMDStatus() {
+      const control = document.getElementById("topbarAMDStatus");
+      try {
+        const response = await fetchWithTimeout("/api/amd/status?force=false", {}, 12000);
+        const status = await response.json();
+        const online = response.ok && Boolean(status.online);
+        AMD_CONNECTION_ONLINE = online;
+        control.classList.toggle("online", online);
+        control.classList.toggle("offline", !online);
+        control.querySelector("span").textContent = online ? "AMD 在线" : "AMD 离线";
+        control.title = status.message || "查看或修改 AMD 连接配置";
+      } catch (_) {
+        AMD_CONNECTION_ONLINE = false;
+        control.classList.add("offline");
+        control.querySelector("span").textContent = "AMD 未连接";
+      }
+      applyAMDAvailability();
+    }
+
+    async function bootstrapConversations() {
+      clearConnectionError();
+      try {
+        const health = await fetchWithTimeout("/health", {}, 5000);
+        if (!health.ok) throw new Error(`健康检查失败（HTTP ${health.status}）`);
+        await loadToolAvailability();
+        await ensureCurrentConversation();
+        await loadConversationMessages(SESSION_ID);
+      } catch (error) {
+        showConnectionError(error.message || String(error));
+      }
+    }
+
+    function appendMessage(role, html) {
+      const container = document.getElementById("messages");
+      const div = document.createElement("div");
+      div.className = "message " + (role === "user" ? "user-message" : "agent-message");
+      div.innerHTML = '<div class="message-bubble">' + html + '</div>';
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+      return div;
+    }
+
+    function setThinking(visible, text) {
+      const el = document.getElementById("thinking");
+      const textEl = document.getElementById("thinking-text");
+      el.style.display = visible ? "flex" : "none";
+      if (text) textEl.textContent = text;
+    }
+
+    function setRequestControls(active, allowRetry = false) {
+      const sendButton = document.getElementById("sendBtn");
+      const stopButton = document.getElementById("stopBtn");
+      const retryButton = document.getElementById("retryBtn");
+      sendButton.disabled = active || (!externalConversation && AMD_CONNECTION_ONLINE === false);
+      stopButton.style.display = active ? "inline-flex" : "none";
+      stopButton.disabled = false;
+      stopButton.textContent = "停止";
+      retryButton.style.display = !active && allowRetry ? "inline-flex" : "none";
+    }
+
+    async function sendMessage(messageOverride = null) {
+      if ((currentConversationReadonly && !externalConversation) || ACTIVE_REQUEST_ID) return;
+      const inp = document.getElementById("userInput");
+      const msg = (messageOverride === null ? inp.value : messageOverride).trim();
+      if (!msg) return;
+
+      const requestSessionId = externalConversation ? externalConversation.id : SESSION_ID;
+      const requestKind = externalConversation ? "external" : "amd";
+      const requestId = "request-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+      LAST_REQUEST_MESSAGE = msg;
+      ACTIVE_REQUEST_ID = requestId;
+      ACTIVE_REQUEST_SESSION_ID = requestSessionId;
+      ACTIVE_REQUEST_KIND = requestKind;
+      ACTIVE_FETCH_CONTROLLER = new AbortController();
+      inp.value = "";
+      appendMessage("user", escapeHtml(msg).replace(/\n/g, "<br>"));
+      setThinking(true, requestKind === "external" ? "正在连接本机 CLI" : "正在连接 Agent");
+      setRequestControls(true);
+
+      const agentDiv = appendMessage("agent", "");
+      const bubble = agentDiv.querySelector(".message-bubble");
+      let answerText = "";
+      let buffer = "";
+      let receivedDone = false;
+      let requestFailed = false;
+      let requestCancelled = false;
+
+      try {
+        const response = await fetch(
+          requestKind === "external"
+            ? "/api/external-conversations/" + encodeURIComponent(requestSessionId) + "/chat"
+            : "/api/chat",
+          {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestKind === "external"
+            ? { message: msg, request_id: requestId }
+            : { message: msg, session_id: requestSessionId, request_id: requestId }),
+          signal: ACTIVE_FETCH_CONTROLLER.signal,
+          }
+        );
+        if (!response.ok) {
+          let detail = `HTTP ${response.status}`;
+          try { detail = (await response.json()).error || detail; } catch (_) {}
+          throw new Error(detail);
+        }
+        if (!response.body) throw new Error("浏览器没有收到流式响应体");
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop();
+
+          for (const part of parts) {
+            if (part.startsWith(":")) continue;
+            const eventMatch = part.match(/^event: (.+)/m);
+            const dataLines = part.match(/^data: ?(.*)$/gm) || [];
+            const eventType = eventMatch ? eventMatch[1].trim() : "message";
+            const data = dataLines.map(line => line.replace(/^data: ?/, "")).join("\n");
+
+            if (eventType === "request") {
+              try { ACTIVE_REQUEST_ID = JSON.parse(data).request_id || requestId; } catch (_) {}
+            } else if (eventType === "stage") {
+              try {
+                const stage = JSON.parse(data);
+                setThinking(true, stage.label || "正在处理");
+              } catch (_) {
+                setThinking(true, data);
+              }
+            } else if (eventType === "message") {
+              answerText += data;
+              bubble.innerHTML = formatAgentText(answerText);
+              document.getElementById("messages").scrollTop = 99999;
+            } else if (eventType === "log") {
+              console.info("外部 CLI：", data);
+            } else if (eventType === "cancelled") {
+              requestCancelled = true;
+              if (!answerText) bubble.innerHTML = '<span class="generation-status">已停止生成</span>';
+              else bubble.innerHTML = formatAgentText(answerText) + '<div class="generation-status">已停止生成</div>';
+              setThinking(false);
+            } else if (eventType === "error") {
+              requestFailed = true;
+              const errorHtml = '<div class="stream-error">错误：' + escapeHtml(data) + '</div>';
+              bubble.innerHTML = answerText ? formatAgentText(answerText) + errorHtml : errorHtml;
+              setThinking(false);
+            } else if (eventType === "done") {
+              receivedDone = true;
+              setThinking(false);
+            }
+          }
+        }
+
+        if (!receivedDone && !requestCancelled && !requestFailed) {
+          requestFailed = true;
+          const message = "连接意外中断，没有收到完成信号";
+          bubble.innerHTML = answerText
+            ? formatAgentText(answerText) + '<div class="stream-error">' + message + '</div>'
+            : '<div class="stream-error">' + message + '</div>';
+        }
+      } catch (error) {
+        requestFailed = true;
+        const message = error.name === "AbortError" ? "请求连接已中断" : error.message || String(error);
+        const errorHtml = '<div class="stream-error">连接失败：' + escapeHtml(message) + '</div>';
+        bubble.innerHTML = answerText ? formatAgentText(answerText) + errorHtml : errorHtml;
+      } finally {
+        ACTIVE_REQUEST_ID = null;
+        ACTIVE_REQUEST_SESSION_ID = null;
+        ACTIVE_FETCH_CONTROLLER = null;
+        ACTIVE_REQUEST_KIND = "amd";
+        setThinking(false);
+        setRequestControls(false, requestFailed || requestCancelled);
+        try { await loadConversations(); } catch (_) {}
+      }
+    }
+
+    async function stopGeneration() {
+      if (!ACTIVE_REQUEST_ID || !ACTIVE_REQUEST_SESSION_ID) return;
+      const stopButton = document.getElementById("stopBtn");
+      stopButton.disabled = true;
+      stopButton.textContent = "正在停止…";
+      setThinking(true, "正在停止生成");
+      try {
+        const url = ACTIVE_REQUEST_KIND === "external"
+          ? "/api/external-conversations/" + encodeURIComponent(ACTIVE_REQUEST_SESSION_ID) + "/cancel"
+          : "/api/chat/" + encodeURIComponent(ACTIVE_REQUEST_SESSION_ID) +
+            "/cancel?request_id=" + encodeURIComponent(ACTIVE_REQUEST_ID);
+        const response = await fetch(url, { method: "POST" });
+        if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
+      } catch (error) {
+        stopButton.disabled = false;
+        stopButton.textContent = "停止重试";
+        setThinking(true, "停止请求发送失败，可再次尝试");
+      }
+    }
+
+    function retryLastMessage() {
+      if (LAST_REQUEST_MESSAGE) sendMessage(LAST_REQUEST_MESSAGE);
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+
+    function escapeJs(s) {
+      return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\r?\n/g, " ");
+    }
+
+    function formatAgentText(text) {
+      return WorkAssistantMessageFormatter.format(text);
+    }
+
+    // Enter 发送，Shift+Enter 换行
+    document.getElementById("userInput").addEventListener("keydown", function(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+    document.addEventListener("click", event => {
+      if (!event.target.closest(".project-launch-menu, .project-launch-toggle")) {
+        document.querySelectorAll(".project-launch-menu.open").forEach(menu => menu.classList.remove("open"));
+      }
+    });
+    document.querySelectorAll(".workspace-modal").forEach(modal => modal.addEventListener("click", event => {
+      if (event.target === modal) modal.hidden = true;
+    }));
+    refreshTopbarAMDStatus();
+    bootstrapConversations();
+  </script>
+</body>
+</html>
