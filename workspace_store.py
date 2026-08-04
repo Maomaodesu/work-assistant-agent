@@ -1,5 +1,6 @@
 """统一的项目、工作项、会话片段与自动整理任务存储层。"""
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -10,7 +11,7 @@ from pathlib import Path
 from settings import get_settings
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 PROJECT_STATUSES = {"active", "archived"}
 WORK_ITEM_TYPES = {
     "feature", "function", "bug", "refactor", "maintenance", "research", "other"
@@ -52,6 +53,47 @@ def _normalize_path(value: str | Path) -> str:
 
 def _json(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _message_content_hash(content: str) -> str:
+    return hashlib.sha256(str(content).encode("utf-8")).hexdigest()
+
+
+def _normalize_messages(messages: list[dict]) -> list[dict]:
+    """Validate imported messages and attach the deterministic content hash."""
+    normalized = []
+    ordinals = set()
+    for index, message in enumerate(messages):
+        ordinal = int(message.get("ordinal", index))
+        role = str(message.get("role", "")).lower()
+        if role not in {"user", "assistant", "system"}:
+            raise WorkspaceStoreError(f"消息角色不正确：{role}")
+        if ordinal in ordinals:
+            raise WorkspaceStoreError("会话消息序号不能重复")
+        ordinals.add(ordinal)
+        content = str(message.get("content", ""))
+        normalized.append({
+            "ordinal": ordinal,
+            "role": role,
+            "content": content,
+            "created_at": str(message.get("created_at") or _now()),
+            "content_hash": str(message.get("content_hash") or _message_content_hash(content)),
+        })
+    return normalized
+
+
+def _segment_content_fingerprint(messages: list[dict]) -> str:
+    digest = hashlib.sha256()
+    for message in messages:
+        digest.update(json.dumps(
+            [
+                int(message["ordinal"]), str(message["role"]).lower(),
+                str(message["created_at"]),
+                str(message.get("content_hash") or _message_content_hash(message.get("content", ""))),
+            ],
+            ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8"))
+    return digest.hexdigest()
 
 
 class WorkspaceStore:
@@ -261,10 +303,14 @@ class WorkspaceStore:
                     segmenter_version TEXT NOT NULL DEFAULT '',
                     created_at       TEXT NOT NULL,
                     updated_at       TEXT NOT NULL,
+                    content_fingerprint TEXT NOT NULL DEFAULT '',
+                    is_current       INTEGER NOT NULL DEFAULT 1 CHECK(is_current IN (0, 1)),
+                    superseded_at    TEXT,
+                    superseded_reason TEXT NOT NULL DEFAULT '',
                     UNIQUE(conversation_id, start_ordinal, end_ordinal)
                 );
                 CREATE INDEX IF NOT EXISTS idx_segments_project_review
-                ON conversation_segments(project_id, review_status, conversation_id);
+                ON conversation_segments(project_id, is_current, review_status, conversation_id);
 
                 CREATE TABLE IF NOT EXISTS conversation_segmentation_state (
                     conversation_id    TEXT PRIMARY KEY REFERENCES conversations(conversation_id) ON DELETE CASCADE,
@@ -274,6 +320,34 @@ class WorkspaceStore:
                     segment_count       INTEGER NOT NULL DEFAULT 0 CHECK(segment_count >= 0),
                     error_message       TEXT NOT NULL DEFAULT '',
                     processed_at        TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS conversation_retrieval_chunks (
+                    chunk_id          TEXT PRIMARY KEY,
+                    conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+                    segment_id       TEXT NOT NULL REFERENCES conversation_segments(segment_id) ON DELETE CASCADE,
+                    chunk_index      INTEGER NOT NULL CHECK(chunk_index >= 0),
+                    start_ordinal    INTEGER NOT NULL CHECK(start_ordinal >= 0),
+                    end_ordinal      INTEGER NOT NULL CHECK(end_ordinal >= start_ordinal),
+                    content          TEXT NOT NULL,
+                    content_hash     TEXT NOT NULL,
+                    char_count       INTEGER NOT NULL CHECK(char_count > 0),
+                    chunker_version  TEXT NOT NULL,
+                    created_at       TEXT NOT NULL,
+                    updated_at       TEXT NOT NULL,
+                    UNIQUE(segment_id, chunk_index)
+                );
+                CREATE INDEX IF NOT EXISTS idx_retrieval_chunks_conversation
+                ON conversation_retrieval_chunks(conversation_id, segment_id, chunk_index);
+
+                CREATE TABLE IF NOT EXISTS conversation_retrieval_index_state (
+                    conversation_id    TEXT PRIMARY KEY REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+                    message_fingerprint TEXT NOT NULL,
+                    chunker_version    TEXT NOT NULL,
+                    status             TEXT NOT NULL CHECK(status IN ('completed','error')),
+                    chunk_count        INTEGER NOT NULL DEFAULT 0 CHECK(chunk_count >= 0),
+                    error_message      TEXT NOT NULL DEFAULT '',
+                    processed_at       TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS segment_work_item_links (
@@ -360,6 +434,52 @@ class WorkspaceStore:
                 conn.execute(
                     "ALTER TABLE conversation_segments ADD COLUMN segmenter_version TEXT NOT NULL DEFAULT ''"
                 )
+            if "content_fingerprint" not in segment_columns:
+                conn.execute(
+                    "ALTER TABLE conversation_segments ADD COLUMN content_fingerprint TEXT NOT NULL DEFAULT ''"
+                )
+            if "is_current" not in segment_columns:
+                conn.execute(
+                    "ALTER TABLE conversation_segments ADD COLUMN is_current INTEGER NOT NULL DEFAULT 1"
+                )
+            if "superseded_at" not in segment_columns:
+                conn.execute(
+                    "ALTER TABLE conversation_segments ADD COLUMN superseded_at TEXT"
+                )
+            if "superseded_reason" not in segment_columns:
+                conn.execute(
+                    "ALTER TABLE conversation_segments ADD COLUMN superseded_reason TEXT NOT NULL DEFAULT ''"
+                )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_segments_current_project_review
+                ON conversation_segments(project_id, is_current, review_status, conversation_id)
+                """
+            )
+            # Existing databases predate content fingerprints.  Fill them
+            # before the next source sync so a later edit cannot be mistaken
+            # for an unchanged segment merely because its range is the same.
+            missing_fingerprints = conn.execute(
+                """
+                SELECT segment_id, conversation_id, start_ordinal, end_ordinal
+                FROM conversation_segments WHERE content_fingerprint=''
+                """
+            ).fetchall()
+            for segment in missing_fingerprints:
+                messages = [dict(row) for row in conn.execute(
+                    """
+                    SELECT ordinal, role, content, created_at, content_hash
+                    FROM messages
+                    WHERE conversation_id=? AND ordinal BETWEEN ? AND ?
+                    ORDER BY ordinal
+                    """,
+                    (segment["conversation_id"], segment["start_ordinal"], segment["end_ordinal"]),
+                )]
+                if messages:
+                    conn.execute(
+                        "UPDATE conversation_segments SET content_fingerprint=? WHERE segment_id=?",
+                        (_segment_content_fingerprint(messages), segment["segment_id"]),
+                    )
             run_columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(classification_runs)")
             }
@@ -1306,8 +1426,14 @@ class WorkspaceStore:
         return self._row(row)
 
     def replace_messages(self, conversation_id: str, messages: list[dict]):
+        """Legacy destructive replacement for callers that explicitly need it.
+
+        External Codex / Claude sync uses :meth:`sync_messages` instead so an
+        appended journal entry cannot destroy segment evidence.
+        """
         if not self.get_conversation(conversation_id):
             raise WorkspaceStoreError("会话不存在")
+        normalized = _normalize_messages(messages)
         with self._connect() as conn:
             conn.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
             conn.execute("DELETE FROM conversation_segments WHERE conversation_id=?", (conversation_id,))
@@ -1315,19 +1441,99 @@ class WorkspaceStore:
                 "DELETE FROM conversation_segmentation_state WHERE conversation_id=?",
                 (conversation_id,),
             )
-            for index, message in enumerate(messages):
-                ordinal = int(message.get("ordinal", index))
-                role = str(message.get("role", "")).lower()
-                if role not in {"user", "assistant", "system"}:
-                    raise WorkspaceStoreError(f"消息角色不正确：{role}")
+            conn.execute(
+                "DELETE FROM conversation_retrieval_index_state WHERE conversation_id=?",
+                (conversation_id,),
+            )
+            for message in normalized:
                 conn.execute(
                     """
                     INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (_new_id("MSG"), conversation_id, ordinal, role,
-                     str(message.get("content", "")), message.get("created_at") or _now(),
-                     str(message.get("content_hash", ""))),
+                    (_new_id("MSG"), conversation_id, message["ordinal"], message["role"],
+                     message["content"], message["created_at"], message["content_hash"]),
                 )
+
+    def sync_messages(self, conversation_id: str, messages: list[dict]) -> dict:
+        """Apply an external conversation snapshot without replacing its prefix.
+
+        JSONL sources are normally append-only.  For an edited source, the
+        longest common prefix is still preserved and only the changed suffix is
+        rewritten.  Derived segment state is invalidated, but the segment rows
+        themselves are reconciled later by the semantic segmenter.
+        """
+        if not self.get_conversation(conversation_id):
+            raise WorkspaceStoreError("会话不存在")
+        incoming = _normalize_messages(messages)
+        existing = self.list_messages(conversation_id)
+
+        def same_message(before: dict, after: dict) -> bool:
+            before_hash = before.get("content_hash") or _message_content_hash(before.get("content", ""))
+            return (
+                int(before["ordinal"]) == int(after["ordinal"])
+                and str(before["role"]).lower() == after["role"]
+                and str(before["created_at"]) == after["created_at"]
+                and before_hash == after["content_hash"]
+            )
+
+        prefix_size = 0
+        while (
+            prefix_size < len(existing)
+            and prefix_size < len(incoming)
+            and same_message(existing[prefix_size], incoming[prefix_size])
+        ):
+            prefix_size += 1
+        if prefix_size == len(existing) == len(incoming):
+            return {
+                "state": "unchanged", "first_changed_ordinal": None,
+                "stable_message_count": prefix_size,
+                "old_message_count": len(existing), "new_message_count": len(incoming),
+            }
+
+        if prefix_size == len(existing):
+            state = "appended"
+        elif prefix_size == len(incoming):
+            state = "truncated"
+        else:
+            state = "rewritten"
+        first_changed_ordinal = (
+            incoming[prefix_size]["ordinal"]
+            if prefix_size < len(incoming)
+            else existing[prefix_size]["ordinal"]
+        )
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM messages WHERE conversation_id=? AND ordinal>=?",
+                (conversation_id, first_changed_ordinal),
+            )
+            for message in incoming[prefix_size:]:
+                conn.execute(
+                    """
+                    INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (_new_id("MSG"), conversation_id, message["ordinal"], message["role"],
+                     message["content"], message["created_at"], message["content_hash"]),
+                )
+            # Retrieval chunks are derived data and must never be used against
+            # a changed transcript.  Segments remain until reconciliation so
+            # their IDs and evidence links can be retained where still valid.
+            conn.execute(
+                "DELETE FROM conversation_segmentation_state WHERE conversation_id=?",
+                (conversation_id,),
+            )
+            conn.execute(
+                "DELETE FROM conversation_retrieval_index_state WHERE conversation_id=?",
+                (conversation_id,),
+            )
+            conn.execute(
+                "DELETE FROM conversation_retrieval_chunks WHERE conversation_id=?",
+                (conversation_id,),
+            )
+        return {
+            "state": state, "first_changed_ordinal": first_changed_ordinal,
+            "stable_message_count": prefix_size,
+            "old_message_count": len(existing), "new_message_count": len(incoming),
+        }
 
     def list_messages(self, conversation_id: str) -> list[dict]:
         with self._connect() as conn:
@@ -1345,16 +1551,52 @@ class WorkspaceStore:
             ).fetchone()
         return self._row(row)
 
-    def list_segments_for_conversation(self, conversation_id: str) -> list[dict]:
+    def get_retrieval_index_state(self, conversation_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM conversation_retrieval_index_state WHERE conversation_id=?",
+                (conversation_id,),
+            ).fetchone()
+        return self._row(row)
+
+    def list_segments_for_conversation(
+        self, conversation_id: str, *, include_superseded: bool = False
+    ) -> list[dict]:
+        current_filter = "" if include_superseded else " AND is_current=1"
         with self._connect() as conn:
             ids = [row[0] for row in conn.execute(
-                """
+                f"""
                 SELECT segment_id FROM conversation_segments
-                WHERE conversation_id=? ORDER BY start_ordinal
+                WHERE conversation_id=?{current_filter} ORDER BY start_ordinal, created_at
                 """,
                 (conversation_id,),
             )]
         return [self.get_segment(segment_id) for segment_id in ids]
+
+    def list_retrieval_chunks_for_conversation(self, conversation_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.*, s.title AS segment_title
+                FROM conversation_retrieval_chunks r
+                JOIN conversation_segments s ON s.segment_id=r.segment_id
+                WHERE r.conversation_id=? AND s.is_current=1
+                ORDER BY s.start_ordinal, r.chunk_index
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
+    def list_retrieval_chunks_for_segment(self, segment_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM conversation_retrieval_chunks
+                WHERE segment_id=? ORDER BY chunk_index
+                """,
+                (segment_id,),
+            ).fetchall()
+        return [self._row(row) for row in rows]
 
     def list_segments(self, project_id: str | None = None) -> list[dict]:
         query = """
@@ -1366,6 +1608,7 @@ class WorkspaceStore:
         if project_id:
             query += " WHERE s.project_id=?"
             params.append(project_id)
+        query += " AND s.is_current=1" if project_id else " WHERE s.is_current=1"
         query += " ORDER BY c.started_at, s.start_ordinal"
         with self._connect() as conn:
             ids = [row[0] for row in conn.execute(query, params)]
@@ -1385,6 +1628,114 @@ class WorkspaceStore:
                 (segment["conversation_id"], segment["start_ordinal"], segment["end_ordinal"]),
             ).fetchall()
         return [self._row(row) for row in rows]
+
+    def replace_retrieval_chunks(
+        self,
+        conversation_id: str,
+        chunks: list[dict],
+        *,
+        message_fingerprint: str,
+        chunker_version: str,
+    ) -> list[dict]:
+        """Atomically replace one conversation's derived retrieval chunks."""
+        segmentation = self.get_segmentation_state(conversation_id)
+        if not segmentation or segmentation["status"] != "completed":
+            raise WorkspaceStoreError("会话尚未完成语义分段，无法建立检索索引")
+
+        segments = {
+            segment["segment_id"]: segment
+            for segment in self.list_segments_for_conversation(conversation_id)
+        }
+        expected_indexes: dict[str, int] = {}
+        for chunk in chunks:
+            segment_id = str(chunk.get("segment_id") or "")
+            segment = segments.get(segment_id)
+            if not segment:
+                raise WorkspaceStoreError("检索块引用了不属于该会话的语义片段")
+            chunk_index = int(chunk.get("chunk_index", -1))
+            if chunk_index != expected_indexes.get(segment_id, 0):
+                raise WorkspaceStoreError("同一语义片段的检索块序号必须连续")
+            expected_indexes[segment_id] = chunk_index + 1
+            start_ordinal = int(chunk.get("start_ordinal", -1))
+            end_ordinal = int(chunk.get("end_ordinal", -1))
+            if (
+                start_ordinal < segment["start_ordinal"]
+                or end_ordinal > segment["end_ordinal"]
+                or end_ordinal < start_ordinal
+            ):
+                raise WorkspaceStoreError("检索块消息范围超出所属语义片段")
+            content = str(chunk.get("content") or "")
+            if not content:
+                raise WorkspaceStoreError("检索块内容不能为空")
+            if len(content) != int(chunk.get("char_count", -1)):
+                raise WorkspaceStoreError("检索块字符数与内容不一致")
+
+        now = _now()
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM conversation_retrieval_chunks WHERE conversation_id=?",
+                (conversation_id,),
+            )
+            for chunk in chunks:
+                content = str(chunk["content"])
+                conn.execute(
+                    """
+                    INSERT INTO conversation_retrieval_chunks(
+                        chunk_id, conversation_id, segment_id, chunk_index,
+                        start_ordinal, end_ordinal, content, content_hash,
+                        char_count, chunker_version, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _new_id("RCH"), conversation_id, chunk["segment_id"],
+                        int(chunk["chunk_index"]), int(chunk["start_ordinal"]),
+                        int(chunk["end_ordinal"]), content,
+                        hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                        int(chunk["char_count"]), chunker_version, now, now,
+                    ),
+                )
+            conn.execute(
+                """
+                INSERT INTO conversation_retrieval_index_state(
+                    conversation_id, message_fingerprint, chunker_version,
+                    status, chunk_count, error_message, processed_at
+                ) VALUES (?, ?, ?, 'completed', ?, '', ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    message_fingerprint=excluded.message_fingerprint,
+                    chunker_version=excluded.chunker_version,
+                    status='completed', chunk_count=excluded.chunk_count,
+                    error_message='', processed_at=excluded.processed_at
+                """,
+                (conversation_id, message_fingerprint, chunker_version, len(chunks), now),
+            )
+        return self.list_retrieval_chunks_for_conversation(conversation_id)
+
+    def save_retrieval_index_error(
+        self,
+        conversation_id: str,
+        *,
+        message_fingerprint: str,
+        chunker_version: str,
+        error_message: str,
+    ) -> dict:
+        now = _now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversation_retrieval_index_state(
+                    conversation_id, message_fingerprint, chunker_version,
+                    status, chunk_count, error_message, processed_at
+                ) VALUES (?, ?, ?, 'error', 0, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    message_fingerprint=excluded.message_fingerprint,
+                    chunker_version=excluded.chunker_version,
+                    status='error', chunk_count=0,
+                    error_message=excluded.error_message,
+                    processed_at=excluded.processed_at
+                """,
+                (conversation_id, message_fingerprint, chunker_version, error_message[:1000], now),
+            )
+        return self.get_retrieval_index_state(conversation_id)
 
     def update_segment_classification(
         self,
@@ -1494,29 +1845,130 @@ class WorkspaceStore:
         if expected_start - 1 != last_ordinal:
             raise WorkspaceStoreError("切分结果必须覆盖全部消息")
 
+        messages_by_ordinal = {int(message["ordinal"]): message for message in messages}
+
+        def fingerprint_for(segment: dict) -> str:
+            start = int(segment["start_ordinal"])
+            end = int(segment["end_ordinal"])
+            source_messages = [messages_by_ordinal[ordinal] for ordinal in range(start, end + 1)]
+            return str(segment.get("content_fingerprint") or _segment_content_fingerprint(source_messages))
+
+        prepared = [{**segment, "content_fingerprint": fingerprint_for(segment)} for segment in segments]
         now = _now()
         with self._connect() as conn:
-            conn.execute(
-                "DELETE FROM conversation_segments WHERE conversation_id=?",
+            existing = [dict(row) for row in conn.execute(
+                "SELECT * FROM conversation_segments WHERE conversation_id=?",
                 (conversation_id,),
-            )
-            for segment in segments:
+            ).fetchall()]
+            used_ids: set[str] = set()
+
+            def take_candidate(predicate, *, prefer_current: bool = True) -> dict | None:
+                candidates = [
+                    row for row in existing
+                    if row["segment_id"] not in used_ids and predicate(row)
+                ]
+                if not candidates:
+                    return None
+                candidates.sort(key=lambda row: (int(row["is_current"]) if prefer_current else 0, row["updated_at"]), reverse=True)
+                return candidates[0]
+
+            for segment in prepared:
+                start = int(segment["start_ordinal"])
+                end = int(segment["end_ordinal"])
+                content_fingerprint = segment["content_fingerprint"]
+                exact = take_candidate(
+                    lambda row: (
+                        int(row["start_ordinal"]) == start
+                        and int(row["end_ordinal"]) == end
+                        and row.get("content_fingerprint") == content_fingerprint
+                    )
+                )
+                if exact:
+                    segment_id = exact["segment_id"]
+                    used_ids.add(segment_id)
+                    # An old range can become current again after a source
+                    # rewrite is reverted.  Its matching classification state
+                    # and evidence remain valid because the content hash also
+                    # matches.
+                    conn.execute(
+                        """
+                        UPDATE conversation_segments
+                        SET is_current=1, superseded_at=NULL, superseded_reason='', updated_at=?
+                        WHERE segment_id=?
+                        """,
+                        (now, segment_id),
+                    )
+                    continue
+
+                # A segment with the same starting message is the affected
+                # tail segment.  Keep its identity and evidence links, but
+                # invalidate its classification cache so it is analysed again.
+                candidate = take_candidate(lambda row: int(row["start_ordinal"]) == start)
+                if candidate:
+                    segment_id = candidate["segment_id"]
+                    used_ids.add(segment_id)
+                    conn.execute(
+                        """
+                        UPDATE conversation_segments
+                        SET start_ordinal=?, end_ordinal=?, project_id=?, title=?,
+                            boundary_reason=?, segmenter_version=?, content_fingerprint=?,
+                            is_current=1, superseded_at=NULL, superseded_reason='', updated_at=?
+                        WHERE segment_id=?
+                        """,
+                        (
+                            start, end, segment.get("project_id"),
+                            str(segment.get("title", ""))[:160],
+                            str(segment.get("boundary_reason", "conversation_start"))[:80],
+                            segmenter_version, content_fingerprint, now, segment_id,
+                        ),
+                    )
+                    conn.execute(
+                        "DELETE FROM segment_classification_state WHERE segment_id=?",
+                        (segment_id,),
+                    )
+                    continue
+
+                segment_id = _new_id("SEG")
+                used_ids.add(segment_id)
                 conn.execute(
                     """
                     INSERT INTO conversation_segments(
                         segment_id, conversation_id, start_ordinal, end_ordinal,
                         segment_kind, project_id, title, summary, confidence,
                         classification_source, review_status, boundary_reason,
-                        segmenter_version, created_at, updated_at
+                        segmenter_version, created_at, updated_at, content_fingerprint,
+                        is_current, superseded_at, superseded_reason
                     ) VALUES (?, ?, ?, ?, 'unclassified', ?, ?, '', NULL,
-                              'rules', 'suggested', ?, ?, ?, ?)
+                              'rules', 'suggested', ?, ?, ?, ?, ?, 1, NULL, '')
                     """,
-                    (_new_id("SEG"), conversation_id, int(segment["start_ordinal"]),
-                     int(segment["end_ordinal"]), segment.get("project_id"),
-                     str(segment.get("title", ""))[:160],
-                     str(segment.get("boundary_reason", "conversation_start"))[:80],
-                     segmenter_version, now, now),
+                    (
+                        segment_id, conversation_id, start, end, segment.get("project_id"),
+                        str(segment.get("title", ""))[:160],
+                        str(segment.get("boundary_reason", "conversation_start"))[:80],
+                        segmenter_version, now, now, content_fingerprint,
+                    ),
                 )
+
+            # Do not physically delete segments which may be referenced by a
+            # context package.  They remain available as historical evidence,
+            # but all normal analysis queries read only current segments.
+            conn.execute(
+                f"""
+                UPDATE conversation_segments
+                SET is_current=0, superseded_at=?, superseded_reason='source_resegmented', updated_at=?
+                WHERE conversation_id=? AND is_current=1
+                  AND segment_id NOT IN ({','.join('?' for _ in used_ids)})
+                """,
+                (now, now, conversation_id, *used_ids),
+            )
+            conn.execute(
+                "DELETE FROM conversation_retrieval_chunks WHERE conversation_id=?",
+                (conversation_id,),
+            )
+            conn.execute(
+                "DELETE FROM conversation_retrieval_index_state WHERE conversation_id=?",
+                (conversation_id,),
+            )
             conn.execute(
                 """
                 INSERT INTO conversation_segmentation_state VALUES (?, ?, ?, 'completed', ?, '', ?)
@@ -1528,7 +1980,7 @@ class WorkspaceStore:
                     error_message='',
                     processed_at=excluded.processed_at
                 """,
-                (conversation_id, message_fingerprint, segmenter_version, len(segments), now),
+                (conversation_id, message_fingerprint, segmenter_version, len(prepared), now),
             )
         return self.list_segments_for_conversation(conversation_id)
 
@@ -1593,7 +2045,8 @@ class WorkspaceStore:
             overlap = conn.execute(
                 """
                 SELECT 1 FROM conversation_segments
-                WHERE conversation_id=? AND NOT(end_ordinal < ? OR start_ordinal > ?)
+                WHERE conversation_id=? AND is_current=1
+                  AND NOT(end_ordinal < ? OR start_ordinal > ?)
                 LIMIT 1
                 """,
                 (conversation_id, start_ordinal, end_ordinal),
@@ -1606,18 +2059,26 @@ class WorkspaceStore:
                 raise WorkspaceStoreError("片段所属项目不存在")
             now = _now()
             segment_id = _new_id("SEG")
+            segment_messages = [dict(row) for row in conn.execute(
+                """
+                SELECT ordinal, role, content, created_at, content_hash FROM messages
+                WHERE conversation_id=? AND ordinal BETWEEN ? AND ? ORDER BY ordinal
+                """,
+                (conversation_id, start_ordinal, end_ordinal),
+            )]
             conn.execute(
                 """
                 INSERT INTO conversation_segments(
                     segment_id, conversation_id, start_ordinal, end_ordinal, segment_kind,
                     project_id, title, summary, confidence, classification_source,
-                    review_status, boundary_reason, segmenter_version, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    review_status, boundary_reason, segmenter_version, created_at, updated_at,
+                    content_fingerprint, is_current, superseded_at, superseded_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, '')
                 """,
                 (segment_id, conversation_id, start_ordinal, end_ordinal, segment_kind,
                  project_id, title.strip(), summary.strip(), confidence,
                  classification_source, review_status, boundary_reason, segmenter_version,
-                 now, now),
+                 now, now, _segment_content_fingerprint(segment_messages)),
             )
         return self.get_segment(segment_id)
 
@@ -1748,7 +2209,7 @@ class WorkspaceStore:
             SELECT s.segment_id
             FROM conversation_segments s
             JOIN conversations c ON c.conversation_id=s.conversation_id
-            WHERE s.project_id=?
+            WHERE s.project_id=? AND s.is_current=1
         """
         params = [project_id]
         if segment_kind:

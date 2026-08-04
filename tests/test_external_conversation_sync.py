@@ -157,10 +157,18 @@ class ExternalConversationSyncTests(unittest.TestCase):
             "total": 3, "matched": 2, "manual": 0, "ambiguous": 0,
             "unassigned": 1, "no_path": 0, "project_count": 1,
         })
+        fake_segmenter = SimpleNamespace(segment_all=lambda: {
+            "errors": 0, "segments_created": 4,
+        })
+        fake_chunker = SimpleNamespace(chunk_all=lambda: {
+            "errors": 0, "chunks_created": 6,
+        })
         with (
             patch.object(server, "external_conversation_sync", fake_sync),
             patch.object(server, "conversation_store", fake_conversations),
             patch.object(server, "conversation_project_matcher", fake_matcher),
+            patch.object(server, "semantic_conversation_segmenter", fake_segmenter),
+            patch.object(server, "retrieval_chunker", fake_chunker),
             patch.object(server.settings_service, "is_setup_complete", return_value=True),
         ):
             with TestClient(server.app) as client:
@@ -171,6 +179,8 @@ class ExternalConversationSyncTests(unittest.TestCase):
         self.assertEqual(response.json()["conversations"]["codex"], 2)
         self.assertEqual(response.json()["workspace"]["imported"], 1)
         self.assertEqual(response.json()["project_matching"]["matched"], 2)
+        self.assertEqual(response.json()["semantic_segments"]["segments_created"], 4)
+        self.assertEqual(response.json()["retrieval_index"]["chunks_created"], 6)
 
 
 if __name__ == "__main__":

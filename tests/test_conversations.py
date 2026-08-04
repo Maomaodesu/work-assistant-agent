@@ -103,6 +103,7 @@ class ConversationTests(unittest.TestCase):
             "async function bootstrapConversations() {", 1
         )[1].split("}", 1)[0]
         self.assertNotIn("syncExternalSessions()", bootstrap_body)
+        self.assertNotIn("ensureCurrentConversation()", bootstrap_body)
         self.assertIn("onclick=\"syncExternalSessions()\"", template)
 
     def test_conversation_page_uses_issue_list_and_readonly_history_comments(self):
@@ -111,12 +112,22 @@ class ConversationTests(unittest.TestCase):
         self.assertIn("新建 work_assistant 会话", template)
         self.assertIn('id="syncSessionsBtn"', template)
         self.assertIn("/api/conversations/sync-all", template)
-        self.assertIn("让 work_assistant 分析此会话", template)
+        self.assertIn("analyzeHistory()", template)
+        self.assertIn("分析历史", template)
+        self.assertIn("请生成开发工作回顾", template)
+        self.assertIn("文件变更、验证情况和会话内结论", template)
+        self.assertIn('id="sendBtn" class="send-btn" onclick="sendMessage()">发送</button>', template)
         self.assertIn("只读历史", template)
         self.assertIn("conversationProjectFilter", template)
         self.assertIn("CONVERSATION_FILTER_STATE", template)
         self.assertIn('requestKind === "summary"', template)
         self.assertIn("/summary", template)
+        self.assertIn("work-assistant-entry", template)
+        self.assertIn("historyAnalysisActions", template)
+        self.assertIn('analysisLabel: "会话分析"', template)
+        self.assertIn("deleteAnalysisComment", template)
+        self.assertIn("commentId: comment.id", template)
+        self.assertNotIn('appendMessage("user", comment.prompt', template)
         self.assertIn("formatConversationTime(item.updated_at)", template)
 
     def test_project_detection_separates_project_and_casual_paths(self):
@@ -198,6 +209,8 @@ class ConversationTests(unittest.TestCase):
             codex_conversation = store.get("codex:codex-session")
             comment = store.add_comment("codex:codex-session", "总结这段对话", "项目已经准备完成。")
             comments = store.comments("codex:codex-session")
+            deleted_comment = store.delete_comment("codex:codex-session", comment["id"])
+            comments_after_delete = store.comments("codex:codex-session")
             store.delete("codex:codex-session")
             after_delete_sync = store.import_external(codex_root, claude_root)
 
@@ -211,7 +224,29 @@ class ConversationTests(unittest.TestCase):
         self.assertTrue(codex_conversation["readonly"])
         self.assertEqual(comment["prompt"], "总结这段对话")
         self.assertEqual([item["content"] for item in comments], ["项目已经准备完成。"])
+        self.assertTrue(deleted_comment)
+        self.assertEqual(comments_after_delete, [])
         self.assertEqual(after_delete_sync["codex"], 0)
+
+    def test_permanent_delete_removes_only_the_verified_external_source_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = ConversationStore(root / "conversations.db")
+            codex_root = root / ".codex"
+            source_path = codex_root / "sessions" / "2026" / "07" / "18" / "remove-me.jsonl"
+            write_jsonl(source_path, codex_records("remove-me"))
+            store.import_external(codex_root, root / ".claude" / "projects")
+            store.set_archived("codex:remove-me", True)
+
+            deleted = store.delete(
+                "codex:remove-me",
+                delete_source=True,
+                allowed_source_roots=(codex_root / "sessions",),
+            )
+
+            self.assertTrue(deleted["source_deleted"])
+            self.assertFalse(source_path.exists())
+            self.assertIsNone(store.get("codex:remove-me"))
 
     def test_conversation_api_create_list_messages_rename_delete(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -228,8 +263,15 @@ class ConversationTests(unittest.TestCase):
                     json={"session_id": "session-api", "title": "API conversation"},
                 )
                 store.append_exchange("session-api", "user text", "assistant text")
+                comment = store.add_comment("session-api", "分析", "可删除的分析")
                 listed = client.get("/api/conversations")
                 messages = client.get("/api/conversations/session-api/messages")
+                deleted_comment = client.delete(
+                    f"/api/conversations/session-api/comments/{comment['id']}"
+                )
+                missing_comment = client.delete(
+                    f"/api/conversations/session-api/comments/{comment['id']}"
+                )
                 renamed = client.patch(
                     "/api/conversations/session-api",
                     json={"title": "Renamed through API"},
@@ -242,16 +284,25 @@ class ConversationTests(unittest.TestCase):
                     "/api/conversations/session-api",
                     json={"archived": False},
                 )
+                rejected_delete = client.delete("/api/conversations/session-api")
+                client.patch(
+                    "/api/conversations/session-api",
+                    json={"archived": True},
+                )
                 deleted = client.delete("/api/conversations/session-api")
                 client.close()
 
         self.assertEqual(created.status_code, 201)
         self.assertEqual(len(listed.json()), 1)
         self.assertEqual(len(messages.json()["messages"]), 2)
+        self.assertEqual(deleted_comment.json(), {"ok": True, "comment_id": comment["id"]})
+        self.assertEqual(missing_comment.status_code, 404)
         self.assertEqual(renamed.json()["title"], "Renamed through API")
         self.assertTrue(archived.json()["archived"])
         self.assertFalse(restored.json()["archived"])
-        self.assertEqual(deleted.json(), {"ok": True})
+        self.assertEqual(rejected_delete.status_code, 400)
+        self.assertIn("请先归档", rejected_delete.json()["error"])
+        self.assertEqual(deleted.json(), {"ok": True, "source_deleted": False})
         checkpointer.delete_thread.assert_called_once_with("session-api")
 
     def test_busy_session_rejects_concurrent_message(self):

@@ -17,13 +17,14 @@ import dataclasses
 import json
 import sys
 import os
+import re
 import socket
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Literal
 
 if sys.platform == "win32":
     # Windows 下 asyncio 需要 Proactor event loop 才能跑子进程
@@ -71,6 +72,15 @@ from external_cli_chat import ExternalCliChatError, external_cli_chat_runner
 from external_conversation_sync import external_conversation_sync
 from project_matcher import conversation_project_matcher
 from semantic_segmenter import semantic_conversation_segmenter
+from retrieval_chunker import retrieval_chunker
+from conversation_retriever import conversation_retriever
+from summary_hierarchy import (
+    FINAL_INPUT_TOKEN_BUDGET,
+    HierarchicalSummaryBuilder,
+    TokenBudget,
+    TokenBudgetError,
+    estimate_tokens,
+)
 from analysis_job_manager import analysis_job_manager
 from amd_health import amd_health_monitor
 
@@ -140,6 +150,11 @@ class ChatRequest(BaseModel):
 
 class ConversationSummaryRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12_000)
+    # auto keeps the UI simple: broad "analyse history" requests become a
+    # complete recap, while a question with a clear target can use retrieval.
+    # The two execution paths are introduced incrementally; clients can start
+    # using this stable contract now.
+    mode: Literal["auto", "focused", "full"] = "auto"
     request_id: str | None = None
 
 
@@ -178,6 +193,10 @@ class ConversationCreateRequest(BaseModel):
 class ConversationRenameRequest(BaseModel):
     title: str | None = None
     archived: bool | None = None
+
+
+class ConversationDeleteRequest(BaseModel):
+    delete_source: bool = False
 
 
 class ToolSettingsRequest(BaseModel):
@@ -281,6 +300,16 @@ def run_agent_stream_worker(
     config["callbacks"] = [callback]
     with bind_generation_cancel(callback.cancel_event):
         return agent_app.invoke(invoke_input, config=config)
+
+
+def _completed_stream_output(
+    result: dict | None, callback: GraphStreamCallback, empty_text: str
+) -> str:
+    """Use the token stream as the canonical final answer when it is available."""
+    if callback.streamed_answer:
+        return callback.answer_text
+    output = (result or {}).get("output", "")
+    return str(output) if output else empty_text
 
 
 # ──────────────────────────────────────────────
@@ -400,7 +429,9 @@ async def api_chat(req: ChatRequest, request: Request):
                     yield sse_event(data, event="message")
                 elif event_type == "complete":
                     result = data or {}
-                    output = result.get("output", "") or "（Agent 没有返回内容）"
+                    output = _completed_stream_output(
+                        result, callback, "（Agent 没有返回内容）"
+                    )
                     conversation_store.append_exchange(
                         req.session_id,
                         req.message,
@@ -451,35 +482,256 @@ async def api_chat(req: ChatRequest, request: Request):
     )
 
 
-def _conversation_summary_prompt(conversation: dict, messages: list[dict], request: str) -> str:
+# 旧历史回退路径同样按统一的保守 token 估算限制，而不是按字符数切割。
+# The final prompt has a lower hard budget after system/output reserves.
+SUMMARY_HISTORY_TOKEN_BUDGET = 20_000
+summary_hierarchy = HierarchicalSummaryBuilder()
+
+# `focused` will use retrieval in the next implementation step.  Keep routing
+# intentionally conservative: failing to identify a narrow subject must not
+# silently turn a whole-session recap into a partial answer.
+SUMMARY_FULL_RECAP_PATTERNS = (
+    "工作回顾", "会话回顾", "会话复盘", "完整复盘", "整体复盘",
+    "完整总结", "整体总结", "整个会话", "整段会话", "全部历史",
+    "整个历史", "所有事项", "全量历史", "全面回顾",
+)
+SUMMARY_FOCUSED_PATTERNS = (
+    re.compile(r"[A-Za-z]:[\\/]|(?:^|\s)[\\/][^\s]+"),
+    re.compile(r"\.[A-Za-z0-9]{1,12}(?:\b|$)"),
+    re.compile(r"[“\"'][^“\"']{2,80}[”\"']"),
+    re.compile(r"第\s*\d+\s*(?:轮|条|个|段|次)"),
+    re.compile(
+        r"(?:关于|针对|围绕|聚焦|只看|查看|排查|分析|总结|回顾)"
+        r"\s*(?:这(?:个|些)?|该)?\s*[\u4e00-\u9fffA-Za-z0-9_.-]{2,}"
+        r"(?:问题|功能|接口|文件|实现|修改|报错|错误|原因|过程)?"
+    ),
+)
+
+
+def _resolve_summary_mode(request: str, requested_mode: str) -> str:
+    """Resolve the stable API contract without depending on an LLM.
+
+    A caller can always override the heuristic.  In `auto`, broad requests
+    deliberately default to `full`; later RAG work therefore cannot omit
+    unrelated work merely because the request did not name a topic.
+    """
+    if requested_mode in {"focused", "full"}:
+        return requested_mode
+
+    normalized = " ".join(request.split()).lower()
+    if any(marker in normalized for marker in SUMMARY_FULL_RECAP_PATTERNS):
+        return "full"
+    if "?" in normalized or "？" in normalized:
+        return "focused"
+    if any(pattern.search(normalized) for pattern in SUMMARY_FOCUSED_PATTERNS):
+        return "focused"
+    return "full"
+
+
+def _summary_workspace_context(conversation: dict) -> dict:
+    """Bridge the legacy timeline ID to its workspace-store counterpart.
+
+    The current conversation page and its analysis comments still live in
+    ``conversation_store``.  The newer workspace database owns semantic
+    segments and, later, retrieval chunks.  Both importers identify external
+    records by the stable pair ``(source, external_session_id)``, so this
+    adapter keeps the UI-compatible ID out of the indexing layer.
+
+    Mapping is deliberately best-effort.  A legacy-only imported conversation
+    remains summarizable while the user has not yet run the workspace sync.
+    """
+    source = str(conversation.get("source") or "").strip().lower()
+    legacy_id = str(conversation.get("id") or "").strip()
+    prefix = f"{source}:"
+    if source not in {"codex", "claude"} or not legacy_id.startswith(prefix):
+        return {
+            "state": "unavailable",
+            "workspace_conversation_id": None,
+            "segment_count": 0,
+            "retrieval_index_state": "missing",
+            "retrieval_chunk_count": 0,
+        }
+
+    external_session_id = legacy_id[len(prefix):].strip()
+    if not external_session_id:
+        return {
+            "state": "unavailable",
+            "workspace_conversation_id": None,
+            "segment_count": 0,
+            "retrieval_index_state": "missing",
+            "retrieval_chunk_count": 0,
+        }
+
+    workspace_conversation = workspace_store.find_conversation(
+        source, external_session_id
+    )
+    if not workspace_conversation:
+        return {
+            "state": "not_synced",
+            "workspace_conversation_id": None,
+            "segment_count": 0,
+            "retrieval_index_state": "missing",
+            "retrieval_chunk_count": 0,
+        }
+
+    workspace_conversation_id = workspace_conversation["conversation_id"]
+    segmentation = workspace_store.get_segmentation_state(
+        workspace_conversation_id
+    )
+    retrieval_index = workspace_store.get_retrieval_index_state(
+        workspace_conversation_id
+    )
+    segment_count = int((segmentation or {}).get("segment_count") or 0)
+    return {
+        "state": "segmented" if segmentation and segmentation["status"] == "completed" else "pending_segmentation",
+        "workspace_conversation_id": workspace_conversation_id,
+        "segment_count": segment_count,
+        "retrieval_index_state": (retrieval_index or {}).get("status", "missing"),
+        "retrieval_chunk_count": int((retrieval_index or {}).get("chunk_count") or 0),
+    }
+
+
+def _summary_route_stage(mode: str, workspace_context: dict) -> dict:
+    """A client-safe SSE payload that exposes routing and index readiness."""
+    if mode == "focused":
+        payload = {
+            "name": "summary_route",
+            "mode": mode,
+            "label": "已识别为聚焦历史分析",
+        }
+    else:
+        payload = {
+            "name": "summary_route",
+            "mode": mode,
+            "label": "已识别为完整历史回顾",
+        }
+    retrieval = workspace_context.get("retrieval") or {}
+    if mode == "focused" and retrieval.get("state") == "ok":
+        payload["label"] = f"已检索到 {retrieval['matched_count']} 处相关历史"
+    payload["history_index"] = workspace_context
+    return payload
+
+# 这类接口的产物用于开发者恢复工作上下文，而不是泛化的聊天摘要。把规范放在
+# 服务端，确保直接调用 API 时也能得到一致的结果；前端传入的 message 仅用于
+# 补充本次摘要的关注点。
+CONVERSATION_WORK_RECAP_INSTRUCTION = """你正在为一次 AI 辅助开发会话生成“工作回顾”，帮助开发者无需翻阅完整记录即可快速恢复本次工作上下文。
+
+仅依据所提供的对话内容总结；不要补充、猜测或声称已检查当前代码库、Git 状态或文件内容。重点是还原“用户提出了什么、AI 如何回应或实施、结果是否达成”。按时间顺序识别并合并同一事项的追问。
+
+请严格按以下结构输出：
+
+# 本次工作概览
+用 2～4 句话说明本次会话围绕什么项目或主题、处理了哪些类型的工作，以及整体结果。
+
+# 事项清单
+对每一个独立的用户诉求输出一项：
+## 事项 N：简短标题
+- 用户诉求：准确概括用户希望解决的问题、希望得到的答案或希望完成的改动。
+- AI 的处理：概括 AI 进行的分析、回答、设计或实施动作；不要复述无关过程。
+- 涉及文件：仅列出对话中被明确说明“已修改、已创建、已删除”的文件，或工具记录明确显示被修改的文件；说明每个文件的改动目的。若本事项没有代码修改，写“无代码修改（本事项为咨询/分析/方案讨论）”；若证据不足，写“未能从对话记录确认具体文件”，不得猜测。
+- 验证情况：列出已执行的测试、构建、接口验证及结果；明确未测试则写“未执行验证”，未提及则写“对话未提及验证”。
+- 会话内结论：只能使用“已解决 / 部分解决 / 未解决 / 仅提供建议或信息”之一，并用一句话说明依据。
+- 遗留项：仅列出对话中明确留下的待办、风险或需用户决策项；没有则写“无”。
+
+# 文件变更汇总
+按文件路径输出表格：文件 | 改动事项 | 改动说明 | 证据状态。证据状态只能是“对话明确说明”或“工具记录确认”。不要把只被阅读、讨论或建议修改的文件当作已修改文件。
+
+# 可继续执行的下一步
+最多列 3 项，按优先级排序；只保留尚未完成且可执行的事项，不要生成泛泛建议。
+
+额外规则：
+1. 区分“AI 声称已完成”与“已通过测试/验证”；前者不等同于已验证。
+2. 对纯问答、选型或评审类诉求，不要强行写成代码任务。
+3. 不要把未来可选建议误写成未解决缺陷。
+4. 保持具体、简洁，优先保留问题、文件、命令、测试结果和结论。"""
+
+
+def _conversation_summary_prompt(
+    conversation: dict,
+    messages: list[dict],
+    request: str,
+    *,
+    analysis_mode: str = "full",
+    retrieved_chunks: list[dict] | None = None,
+) -> str:
     """把只读历史作为本次 work_assistant 评论的上下文，而不改写原会话。"""
     source_name = {"codex": "Codex", "claude": "Claude"}.get(
         conversation.get("source"), "外部"
     )
-    transcript = []
-    total_chars = 0
-    # 保留最新的内容，避免把超长导入历史塞满模型上下文。
-    for item in reversed(messages):
-        content = str(item.get("content") or "").strip()
-        if not content:
-            continue
-        line = f"{('用户' if item.get('role') == 'user' else source_name)}：{content}"
-        if total_chars + len(line) > 48_000:
+    if retrieved_chunks:
+        transcript = []
+        for evidence_index, chunk in enumerate(retrieved_chunks, start=1):
+            role = "相邻上下文" if chunk.get("is_neighbor") else "检索命中"
+            transcript.append(
+                f"[证据 {evidence_index}｜{role}｜片段 {chunk['segment_id']}｜"
+                f"消息 {chunk['start_ordinal']}–{chunk['end_ordinal']}｜"
+                f"相关度 {chunk.get('score', 0):.4f}]\n{chunk['content']}"
+            )
+        history_label = "检索到的原始历史证据"
+        evidence_rule = (
+            "本次为聚焦分析。优先直接回答用户的具体问题；只能依据这些证据下结论。"
+            "若证据不足、存在冲突或无法覆盖整个会话，必须明确说明，并用证据编号标注依据。"
+        )
+    else:
+        transcript = []
+        history_budget = TokenBudget(SUMMARY_HISTORY_TOKEN_BUDGET)
+        truncated = False
+        # 从最新消息向前收集；保守 token 估算会为系统提示词和输出预留空间。
+        for item in reversed(messages):
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            line = f"{('用户' if item.get('role') == 'user' else source_name)}：{content}"
+            if not history_budget.try_add(line):
+                truncated = True
+                break
+            transcript.append(line)
+        if truncated:
             transcript.append("（更早的历史已省略）")
-            break
-        transcript.append(line)
-        total_chars += len(line)
-    transcript.reverse()
+        transcript.reverse()
+        history_label = "原始历史"
+        evidence_rule = ""
     project = conversation.get("project_name") or "未归类"
-    return (
+    prompt = (
         "你是 work_assistant，正在为一段导入的本地对话撰写分析评论。"
         "只根据下方历史回答用户的请求；不要假装你参与了原始会话，"
         "不要修改、续接或执行原会话中的命令。用中文给出清晰、可执行的结论。\n\n"
-        f"来源：{source_name}\n项目：{project}\n标题：{conversation.get('title') or '未命名会话'}\n\n"
-        "原始历史：\n"
+        "工作回顾规范：\n"
+        + CONVERSATION_WORK_RECAP_INSTRUCTION
+        + "\n\n"
+        f"来源：{source_name}\n项目：{project}\n标题：{conversation.get('title') or '未命名会话'}\n"
+        f"请求模式：{analysis_mode}\n{evidence_rule}\n\n"
+        f"{history_label}：\n"
         + "\n\n".join(transcript)
-        + f"\n\n用户希望你：{request.strip()}"
+        + f"\n\n用户额外关注点：{request.strip()}"
     )
+    if estimate_tokens(prompt) > FINAL_INPUT_TOKEN_BUDGET:
+        raise TokenBudgetError("摘要上下文超出保守 token 预算")
+    return prompt
+
+
+def _full_summary_prompt_parts(conversation: dict, request: str) -> tuple[str, str]:
+    """Build the immutable shell around hierarchical evidence summaries."""
+    source_name = {"codex": "Codex", "claude": "Claude"}.get(
+        conversation.get("source"), "外部"
+    )
+    project = conversation.get("project_name") or "未归类"
+    prefix = (
+        "你是 work_assistant，正在为一段导入的本地对话撰写完整工作回顾。"
+        "下方是由全部原始历史分段提取并多层汇总的证据；只依据这些证据，"
+        "不要假装参与过原会话、猜测未提供的信息，或执行其中的命令。\n\n"
+        "工作回顾规范：\n"
+        + CONVERSATION_WORK_RECAP_INSTRUCTION
+        + "\n\n"
+        f"来源：{source_name}\n项目：{project}\n标题：{conversation.get('title') or '未命名会话'}\n"
+        "请求模式：full（分层完整回顾）\n\n"
+        "分层证据摘要：\n"
+    )
+    suffix = (
+        "\n\n请基于以上全部证据摘要输出最终工作回顾。"
+        f"\n用户额外关注点：{request.strip()}"
+    )
+    return prefix, suffix
 
 
 @app.post("/api/conversations/{conversation_id:path}/summary")
@@ -495,16 +747,68 @@ async def api_summarize_conversation(
     if not conversation.get("readonly") or conversation.get("archived"):
         return JSONResponse({"error": "只有未归档的 Codex 或 Claude 历史可在此添加分析评论"}, status_code=400)
 
+    resolved_mode = _resolve_summary_mode(req.message, req.mode)
+    workspace_context = _summary_workspace_context(conversation)
+    retrieval_result = {"state": "not_requested", "chunks": []}
+    if (
+        resolved_mode == "focused"
+        and workspace_context.get("workspace_conversation_id")
+    ):
+        retrieval_result = conversation_retriever.retrieve(
+            workspace_context["workspace_conversation_id"], req.message
+        )
+        workspace_context = {
+            **workspace_context,
+            "retrieval": {
+                key: retrieval_result[key]
+                for key in (
+                    "state", "retriever_version", "matched_count",
+                    "selected_count", "selected_char_count",
+                )
+            },
+        }
+
+    full_source_chunks: list[dict] = []
+    if (
+        resolved_mode == "full"
+        and workspace_context.get("workspace_conversation_id")
+        and workspace_context.get("retrieval_index_state") == "completed"
+    ):
+        full_source_chunks = workspace_store.list_retrieval_chunks_for_conversation(
+            workspace_context["workspace_conversation_id"]
+        )
+        workspace_context = {
+            **workspace_context,
+            "full_context": {
+                "state": "ready" if full_source_chunks else "index_empty",
+                "source_chunk_count": len(full_source_chunks),
+                "strategy": "hierarchical_map_reduce" if full_source_chunks else "latest_history_fallback",
+            },
+        }
+
     session_id = f"summary:{conversation_id}"
     session_lock = _session_locks.setdefault(session_id, asyncio.Lock())
     if session_lock.locked():
         return JSONResponse({"error": "该会话正在生成分析评论，请稍候"}, status_code=409)
     await session_lock.acquire()
 
-    invoke_input = build_turn_input(
-        _conversation_summary_prompt(conversation, conversation_store.messages(conversation_id), req.message)
-    )
+    fallback_prompt = ""
+    if not full_source_chunks:
+        try:
+            fallback_prompt = _conversation_summary_prompt(
+                conversation,
+                conversation_store.messages(conversation_id),
+                req.message,
+                analysis_mode=resolved_mode,
+                retrieved_chunks=retrieval_result["chunks"],
+            )
+        except TokenBudgetError as exc:
+            session_lock.release()
+            return JSONResponse({"error": str(exc)}, status_code=422)
     request_id = req.request_id or f"summary-{uuid.uuid4()}"
+    # 摘要的完整原始历史已包含在本轮输入中，因此绝不能复用同一个 LangGraph
+    # thread。复用会把前一次的整段历史及摘要再次追加，最终超过模型上下文窗口。
+    graph_session_id = f"{session_id}:{uuid.uuid4().hex}"
     cancel_event = threading.Event()
     active_generation = ActiveGeneration(request_id=request_id, cancel_event=cancel_event, started_at=time.monotonic())
     _active_generations[session_id] = active_generation
@@ -512,9 +816,31 @@ async def api_summarize_conversation(
     event_queue: asyncio.Queue = asyncio.Queue()
     callback = GraphStreamCallback(loop, event_queue, cancel_event)
 
+    def emit_preparation_stage(data: dict):
+        loop.call_soon_threadsafe(event_queue.put_nowait, ("stage", data))
+
     def execute_graph():
         try:
-            outcome = ("complete", run_agent_stream_worker(invoke_input, session_id, callback))
+            prompt = fallback_prompt
+            if full_source_chunks:
+                prefix, suffix = _full_summary_prompt_parts(conversation, req.message)
+                prompt, details = summary_hierarchy.build_final_prompt(
+                    chunks=full_source_chunks,
+                    final_prefix=prefix,
+                    final_suffix=suffix,
+                    cancel_event=cancel_event,
+                    on_progress=emit_preparation_stage,
+                )
+                emit_preparation_stage({
+                    "name": "summary_final_context",
+                    "label": "正在生成完整工作回顾",
+                    "details": details,
+                })
+            invoke_input = build_turn_input(prompt)
+            # Imported-history analysis is text generation, never task
+            # creation.  Its generated final pass uses a fresh graph thread.
+            invoke_input["force_chat"] = True
+            outcome = ("complete", run_agent_stream_worker(invoke_input, graph_session_id, callback))
         except GenerationCancelled:
             outcome = ("cancelled", None)
         except Exception as exc:
@@ -539,6 +865,13 @@ async def api_summarize_conversation(
         last_heartbeat = loop.time()
         try:
             yield sse_event(json.dumps({"request_id": request_id}, ensure_ascii=False), event="request")
+            yield sse_event(
+                json.dumps(
+                    _summary_route_stage(resolved_mode, workspace_context),
+                    ensure_ascii=False,
+                ),
+                event="stage",
+            )
             while True:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
@@ -564,7 +897,9 @@ async def api_summarize_conversation(
                 elif event_type == "token":
                     yield sse_event(data, event="message")
                 elif event_type == "complete":
-                    output = (data or {}).get("output", "") or "（work_assistant 没有返回内容）"
+                    output = _completed_stream_output(
+                        data, callback, "（work_assistant 没有返回内容）"
+                    )
                     conversation_store.add_comment(conversation_id, req.message, output)
                     if not callback.streamed_answer:
                         yield sse_event(output, event="message")
@@ -593,6 +928,26 @@ async def api_summarize_conversation(
         generate(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/conversations/{conversation_id:path}/summary/cancel")
+async def api_cancel_conversation_summary(
+    conversation_id: str,
+    request_id: str | None = None,
+):
+    """Cancel a summary without closing SSE before it can report its final status."""
+    session_id = f"summary:{conversation_id}"
+    active = _active_generations.get(session_id)
+    if not active:
+        return JSONResponse({"error": "该会话当前没有正在执行的分析"}, status_code=404)
+    if request_id and active.request_id != request_id:
+        return JSONResponse({"error": "请求标识不匹配"}, status_code=409)
+    active.cancel_event.set()
+    return JSONResponse({
+        "ok": True,
+        "status": "cancelling",
+        "request_id": active.request_id,
+    })
 
 
 @app.post("/api/chat/{session_id}/cancel")
@@ -777,18 +1132,31 @@ async def api_workspace_sync_conversations():
 
 @app.post("/api/conversations/sync-all")
 async def api_sync_all_conversations():
-    """同步会话资料，并更新项目侧用于分析和归类的索引。"""
+    """同步会话资料，并刷新本地分段与检索块等派生索引。"""
     loop = asyncio.get_running_loop()
     legacy_result = await loop.run_in_executor(None, conversation_store.import_external)
     workspace_result = await loop.run_in_executor(None, external_conversation_sync.sync)
     # 新同步的会话应立即按其工作目录归入项目；否则用户必须先额外执行一次
     # “匹配项目”或手动关联，项目页面看起来就像没有发现新对话。
     match_result = await loop.run_in_executor(None, conversation_project_matcher.match_all)
+    # These are deterministic local transforms.  Changed source conversations
+    # invalidate their old derived rows during sync; this pass recreates only
+    # the changed segment/chunk indexes and leaves unchanged ones untouched.
+    segment_result = await loop.run_in_executor(
+        None, semantic_conversation_segmenter.segment_all
+    )
+    retrieval_result = await loop.run_in_executor(None, retrieval_chunker.chunk_all)
     return JSONResponse({
-        "ok": workspace_result["errors"] == 0,
+        "ok": (
+            workspace_result["errors"] == 0
+            and segment_result["errors"] == 0
+            and retrieval_result["errors"] == 0
+        ),
         "conversations": legacy_result,
         "workspace": workspace_result,
         "project_matching": match_result,
+        "semantic_segments": segment_result,
+        "retrieval_index": retrieval_result,
     })
 
 
@@ -802,8 +1170,26 @@ async def api_workspace_match_conversation_projects():
 
 @app.post("/api/workspace/conversations/segment")
 async def api_workspace_segment_conversations():
-    result = await asyncio.get_running_loop().run_in_executor(
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
         None, semantic_conversation_segmenter.segment_all
+    )
+    # Rebuild only stale chunk indexes after local segmentation.  This keeps
+    # source updates cheap (they merely invalidate derived data) and gives the
+    # existing indexing action a deterministic rebuild point.
+    retrieval_result = await loop.run_in_executor(None, retrieval_chunker.chunk_all)
+    return JSONResponse({
+        "ok": result["errors"] == 0 and retrieval_result["errors"] == 0,
+        **result,
+        "retrieval_index": retrieval_result,
+    })
+
+
+@app.post("/api/workspace/conversations/rebuild-retrieval-index")
+async def api_workspace_rebuild_retrieval_index():
+    """Rebuild only missing or stale retrieval chunks without AMD calls."""
+    result = await asyncio.get_running_loop().run_in_executor(
+        None, retrieval_chunker.chunk_all
     )
     return JSONResponse({"ok": result["errors"] == 0, **result})
 
@@ -1280,6 +1666,17 @@ async def api_import_conversations():
     return JSONResponse({"ok": True, **result})
 
 
+@app.delete("/api/conversations/{conversation_id:path}/comments/{comment_id}")
+async def api_delete_conversation_comment(conversation_id: str, comment_id: int):
+    """Remove one work_assistant analysis without changing the source history."""
+    conversation = conversation_store.get(conversation_id)
+    if not conversation:
+        return JSONResponse({"error": "会话不存在"}, status_code=404)
+    if not conversation_store.delete_comment(conversation_id, comment_id):
+        return JSONResponse({"error": "分析记录不存在或不属于该会话"}, status_code=404)
+    return JSONResponse({"ok": True, "comment_id": comment_id})
+
+
 @app.get("/api/conversations/{conversation_id:path}/messages")
 async def api_conversation_messages(conversation_id: str):
     conversation = conversation_store.get(conversation_id)
@@ -1315,21 +1712,33 @@ async def api_rename_conversation(
 
 
 @app.delete("/api/conversations/{conversation_id:path}")
-async def api_delete_conversation(conversation_id: str):
+async def api_delete_conversation(
+    conversation_id: str,
+    req: ConversationDeleteRequest | None = None,
+):
     if conversation_id in _active_generations:
         return JSONResponse(
             {"error": "该会话正在生成回答，请先停止生成再删除"},
             status_code=409,
         )
-    conversation = conversation_store.delete(conversation_id)
+    conversation = conversation_store.get(conversation_id)
     if not conversation:
         return JSONResponse({"error": "会话不存在"}, status_code=404)
+    if not conversation["archived"]:
+        return JSONResponse({"error": "请先归档会话，再执行删除"}, status_code=400)
+    try:
+        conversation = conversation_store.delete(
+            conversation_id,
+            delete_source=bool(req and req.delete_source),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     if conversation["source"] == "work_assistant":
         await asyncio.get_event_loop().run_in_executor(
             None, session_checkpointer.delete_thread, conversation_id
         )
         _session_locks.pop(conversation_id, None)
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "source_deleted": conversation["source_deleted"]})
 
 
 @app.get("/api/tasks/{task_id}")

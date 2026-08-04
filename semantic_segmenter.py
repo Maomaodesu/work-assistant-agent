@@ -204,17 +204,6 @@ class SemanticConversationSegmenter:
                 "boundary_reasons": {},
             }
 
-        existing_segments = self.store.list_segments_for_conversation(conversation_id)
-        if any(
-            segment["review_status"] == "confirmed" or segment["work_item_links"]
-            for segment in existing_segments
-        ):
-            return {
-                "state": "protected",
-                "segment_count": len(existing_segments),
-                "boundary_reasons": {},
-            }
-
         primary_project = conversation.get("primary_project")
         segments = build_semantic_segments(
             messages,
@@ -267,8 +256,6 @@ class SemanticConversationSegmenter:
                     boundary_counter.update(outcome["boundary_reasons"])
                 elif outcome["state"] == "unchanged":
                     result["unchanged_conversations"] += 1
-                elif outcome["state"] == "protected":
-                    result["protected_conversations"] += 1
                 else:
                     result["empty_conversations"] += 1
             except Exception as exc:

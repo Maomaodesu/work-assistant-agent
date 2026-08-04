@@ -1931,9 +1931,9 @@ body, .chat-main, .workspace-main, .tasks-layout, .setup-layout,
 .conversation-source-badge, .conversation-readonly, .conversation-local { display: inline-flex; flex: 0 0 auto; align-items: center; min-height: 21px; padding: 1px 7px; border: 1px solid currentColor; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 17px; }
 .conversation-source-badge.source-codex { color: #79c0ff; background: #0c2d6b; }
 .conversation-source-badge.source-claude { color: #e3b341; background: #3d2e00; }
-.conversation-source-badge.source-work_assistant { color: #c9d1d9; background: #21262d; }
+.conversation-source-badge.source-work_assistant { color: #dfc4ff; background: #35234f; }
 .conversation-readonly { color: #8b949e; border-color: #30363d; background: #161b22; font-weight: 500; }
-.conversation-local { color: #7ee787; border-color: #238636; background: #0f5323; font-weight: 500; }
+.conversation-local { color: #dfc4ff; border-color: #63458c; background: #35234f; font-weight: 500; }
 .conversation-issue-meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; color: #8b949e; font-size: 12px; }
 .conversation-issue-meta > span + span::before { margin-right: 8px; color: #484f58; content: "·"; }
 .conversation-project-link { color: #58a6ff; }
@@ -1961,6 +1961,10 @@ body, .chat-main, .workspace-main, .tasks-layout, .setup-layout,
 .conversation-timeline-entry header strong { color: #f0f6fc; font-size: 14px; }
 .conversation-timeline-entry header span, .conversation-timeline-entry header time { color: #8b949e; font-size: 12px; }
 .conversation-timeline-entry header time { margin-left: auto; }
+.conversation-analysis-delete { display: inline-flex; align-items: center; min-height: 30px; padding: 0 7px; appearance: none; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #cfb4ef; font: 500 12px var(--font); line-height: 1; cursor: pointer; transition: border-color .16s ease, background-color .16s ease, color .16s ease; }
+.conversation-analysis-delete:hover { border-color: #7857a8; background: rgba(187, 134, 252, 0.13); color: #f0e2ff; }
+.conversation-analysis-delete:focus-visible { outline: 2px solid #bb86fc; outline-offset: 2px; }
+.conversation-analysis-delete:active { background: rgba(187, 134, 252, 0.24); }
 .conversation-timeline-content { padding: 16px; color: #c9d1d9; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .conversation-timeline-content > :first-child { margin-top: 0; }
 .conversation-timeline-content > :last-child { margin-bottom: 0; }
@@ -1978,6 +1982,16 @@ body, .chat-main, .workspace-main, .tasks-layout, .setup-layout,
 .conversation-timeline-entry.analysis-entry header { border-bottom-color: #63458c; background: #35234f; }
 .conversation-timeline-entry.analysis-entry header strong { color: #dfc4ff; }
 .conversation-timeline-entry.analysis-entry header span, .conversation-timeline-entry.analysis-entry header time { color: #cfb4ef; }
+/* Native work_assistant conversations share the purple visual language of analysis comments. */
+.conversation-timeline-entry.work-assistant-entry { border-color: #bb86fc; background: #261a3d; }
+.conversation-timeline-entry.work-assistant-entry header { border-bottom-color: #63458c; background: #35234f; }
+.conversation-timeline-entry.work-assistant-entry header strong { color: #dfc4ff; }
+.conversation-timeline-entry.work-assistant-entry header span, .conversation-timeline-entry.work-assistant-entry header time { color: #cfb4ef; }
+/* A local user's own messages stay blue, even when the conversation is a work_assistant one. */
+.conversation-timeline-entry.work-assistant-entry.user-entry { border-color: #7589ff; background: #1b1f35; }
+.conversation-timeline-entry.work-assistant-entry.user-entry header { border-bottom-color: #3d4c82; background: #252d52; }
+.conversation-timeline-entry.work-assistant-entry.user-entry header strong { color: #c5ceff; }
+.conversation-timeline-entry.work-assistant-entry.user-entry header span, .conversation-timeline-entry.work-assistant-entry.user-entry header time { color: #aeb9dd; }
 .conversation-timeline-entry.original-entry { border-left-width: 4px; }
 .conversation-comment-box { max-width: 960px; padding-top: 12px; }
 .conversation-comment-box h2 { margin-bottom: 6px; color: #f0f6fc; font-size: 16px; }
@@ -1989,6 +2003,8 @@ body, .chat-main, .workspace-main, .tasks-layout, .setup-layout,
 .conversation-comment-actions > div { display: flex; align-items: center; gap: 8px; }
 .conversation-comment-actions .send-btn { height: 32px; padding: 0 13px; font-size: 14px; }
 .conversation-comment-actions .retry-btn, .conversation-comment-actions .stop-btn { height: 32px; padding: 0 10px; }
+.conversation-history-analysis-actions { display: flex; justify-content: flex-end; padding: 12px 0; }
+.conversation-history-analysis-actions .send-btn { min-height: 34px; }
 .conversations-page .external-session-notice { max-width: 960px; margin: 0 0 16px; border: 1px solid #9e6a03; border-radius: 6px; }
 .conversations-page .app-status-banner { max-width: 960px; margin-bottom: 16px; border: 1px solid #da3633; border-radius: 6px; }
 

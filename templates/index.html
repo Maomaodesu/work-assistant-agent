@@ -50,7 +50,7 @@
     <section id="conversationDetailView" class="conversation-detail-view" hidden aria-live="polite">
       <header class="conversation-detail-titlebar">
         <button class="conversation-back-button" type="button" onclick="showConversationIndex()">← 所有会话</button>
-        <div class="conversation-detail-actions"><button id="conversationArchiveButton" class="btn-secondary" type="button" hidden></button></div>
+        <div class="conversation-detail-actions"><button id="conversationArchiveButton" class="btn-secondary" type="button" hidden></button><button id="conversationDeleteButton" class="btn-secondary danger" type="button" hidden>删除</button></div>
       </header>
       <div id="appStatusBanner" class="app-status-banner" style="display:none">
         <span id="appStatusText"></span>
@@ -63,20 +63,23 @@
       </header>
       <div class="conversation-timeline" id="messages"></div>
       <section class="conversation-comment-box" aria-labelledby="commentHeading">
-        <h2 id="commentHeading">让 work_assistant 分析此会话</h2>
-        <p id="conversationCommentHint">基于以上历史总结、提炼待办，或继续追问。</p>
+        <h2 id="commentHeading">与 work_assistant 对话</h2>
+        <p id="conversationCommentHint">继续讨论当前话题，回复会保存在此会话中。</p>
         <div class="thinking-indicator" id="thinking" style="display:none">
           <span class="dot"></span><span class="dot"></span><span class="dot"></span>
           <span id="thinking-text">思考中...</span>
         </div>
-        <div class="conversation-comment-editor">
+        <div id="conversationCommentEditor" class="conversation-comment-editor">
           <textarea
             id="userInput"
             class="conversation-comment-input"
             placeholder="例如：总结这段对话，并列出下一步行动…"
             rows="5"
           ></textarea>
-          <div class="conversation-comment-actions"><span>使用 Markdown 格式化评论</span><div><button id="retryBtn" class="retry-btn" style="display:none" onclick="retryLastMessage()">重试</button><button id="stopBtn" class="stop-btn" style="display:none" onclick="stopGeneration()">停止</button><button id="sendBtn" class="send-btn" onclick="sendMessage()">分析历史</button></div></div>
+          <div class="conversation-comment-actions"><span>使用 Markdown 格式化评论</span><div><button id="retryBtn" class="retry-btn" style="display:none" onclick="retryLastMessage()">重试</button><button id="stopBtn" class="stop-btn" style="display:none" onclick="stopGeneration()">停止</button><button id="sendBtn" class="send-btn" onclick="sendMessage()">发送</button></div></div>
+        </div>
+        <div id="historyAnalysisActions" class="conversation-history-analysis-actions" hidden>
+          <button id="analyzeHistoryButton" class="send-btn" type="button" onclick="analyzeHistory()">分析历史</button>
         </div>
       </section>
     </section>
@@ -407,8 +410,12 @@
 
     function applyAMDAvailability() {
       const sendButton = document.getElementById("sendBtn");
+      const analyzeButton = document.getElementById("analyzeHistoryButton");
       if (!ACTIVE_REQUEST_ID) sendButton.disabled = !externalConversation && AMD_CONNECTION_ONLINE === false;
+      if (!ACTIVE_REQUEST_ID) analyzeButton.disabled = AMD_CONNECTION_ONLINE === false;
       sendButton.title = !externalConversation && AMD_CONNECTION_ONLINE === false
+        ? "AMD 服务离线，请先修改连接配置" : "";
+      analyzeButton.title = AMD_CONNECTION_ONLINE === false
         ? "AMD 服务离线，请先修改连接配置" : "";
     }
 
@@ -503,15 +510,6 @@
       AMD_STATUS_POLL_TIMER = setInterval(() => checkAMDConnection(false), 60000);
     }
 
-    async function ensureCurrentConversation() {
-      const response = await fetchWithTimeout("/api/conversations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: SESSION_ID, title: "新对话" }),
-      });
-      if (!response.ok) throw new Error(`初始化会话失败（HTTP ${response.status}）`);
-    }
-
     async function loadConversations() {
       const response = await fetchWithTimeout("/api/conversations");
       if (!response.ok) throw new Error(`加载会话失败（HTTP ${response.status}）`);
@@ -565,6 +563,7 @@
         <div class="conversation-issue-actions">
           <button title="重命名" aria-label="重命名" onclick="event.stopPropagation(); renameConversation('${safeJsId}', '${safeJsTitle}')">编辑</button>
           <button title="${item.archived ? "恢复" : "归档"}" onclick="event.stopPropagation(); archiveConversation('${safeJsId}', ${!item.archived})">${item.archived ? "恢复" : "归档"}</button>
+          ${item.archived ? `<button class="danger" title="删除" onclick="event.stopPropagation(); deleteConversation('${safeJsId}', '${escapeHtml(escapeJs(item.source))}')">删除</button>` : ""}
         </div>`;
       return row;
     }
@@ -729,23 +728,30 @@
       const notice = document.getElementById("externalNotice");
       const input = document.getElementById("userInput");
       const sendButton = document.getElementById("sendBtn");
+      const editor = document.getElementById("conversationCommentEditor");
+      const historyActions = document.getElementById("historyAnalysisActions");
       if (conversation.archived) {
         notice.style.display = "block";
         notice.textContent = "这是已归档会话。恢复后才能继续发送消息。";
         input.disabled = true;
         sendButton.disabled = true;
         input.placeholder = "已归档会话为只读模式";
+        editor.hidden = true;
+        historyActions.hidden = true;
       } else if (conversation.readonly) {
         notice.style.display = "block";
         notice.textContent = "这是从 " + conversationSourceLabel(conversation.source) + " 导入的只读历史；work_assistant 的分析会作为独立评论保留在下方，不会改写原始记录。";
-        input.disabled = false;
-        sendButton.disabled = false;
-        input.placeholder = "例如：总结这段对话，并列出下一步行动…";
+        input.disabled = true;
+        sendButton.disabled = true;
+        editor.hidden = true;
+        historyActions.hidden = false;
       } else {
         notice.style.display = "none";
         input.disabled = false;
         sendButton.disabled = false;
         input.placeholder = "输入消息，Shift+Enter 换行，Enter 发送…";
+        editor.hidden = false;
+        historyActions.hidden = true;
       }
 
       renderConversationDetailHeader(conversation);
@@ -764,8 +770,11 @@
         });
       }
       (data.comments || []).forEach(comment => {
-        appendMessage("user", comment.prompt, { source: "work_assistant", createdAt: comment.created_at, analysis: true });
-        appendMessage("agent", comment.content, { source: "work_assistant", createdAt: comment.created_at, analysis: true });
+        appendMessage("agent", comment.content, {
+          source: "work_assistant", createdAt: comment.created_at,
+          analysis: true, analysisLabel: "会话分析",
+          commentId: comment.id, conversationId: conversation.id,
+        });
       });
       await loadConversations();
       document.getElementById("conversationIndexView").hidden = true;
@@ -786,9 +795,15 @@
       archive.hidden = false;
       archive.textContent = conversation.archived ? "恢复会话" : "归档会话";
       archive.onclick = async () => { await archiveConversation(conversation.id, !conversation.archived); showConversationIndex(); };
+      const remove = document.getElementById("conversationDeleteButton");
+      remove.hidden = !conversation.archived;
+      remove.onclick = () => deleteConversation(conversation.id, conversation.source);
       document.getElementById("conversationCommentHint").textContent = conversation.readonly
-        ? "原始记录保持只读。work_assistant 的提问与结论会作为独立评论附在这条历史下。"
+        ? "原始记录保持只读。点击“分析历史”后，work_assistant 会在下方生成一份完整对话总结。"
         : "继续与 work_assistant 对话；回复会保存在此会话中。";
+      document.getElementById("commentHeading").textContent = conversation.readonly
+        ? "会话分析"
+        : "与 work_assistant 对话";
     }
 
     async function selectConversation(conversationId) {
@@ -844,12 +859,41 @@
       else await loadConversations();
     }
 
-    async function deleteConversation(id) {
-      if (!confirm("删除这个会话？外部 Claude/Codex 原始文件不会被删除。")) return;
-      const response = await fetch("/api/conversations/" + encodeURIComponent(id), { method: "DELETE" });
-      if (!response.ok) return;
-      if (id === ACTIVE_CONVERSATION_ID) await newConversation();
-      else await loadConversations();
+    async function deleteConversation(id, source) {
+      if (!confirm("将从 Work Assistant 移除这条已归档会话。此操作无法恢复。")) return;
+      const canDeleteSource = source === "codex" || source === "claude";
+      const deleteSource = canDeleteSource && confirm(
+        "是否同时永久删除本机 " + conversationSourceLabel(source) + " 原始记录？\n\n"
+        + "确定：同时删除本机 JSONL 历史文件，无法恢复。\n"
+        + "取消：仅从 Work Assistant 移除，保留原始记录。"
+      );
+      const response = await fetch("/api/conversations/" + encodeURIComponent(id), {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delete_source: deleteSource }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        alert(data.error || "删除失败");
+        return;
+      }
+      if (id === ACTIVE_CONVERSATION_ID) showConversationIndex();
+      await loadConversations();
+    }
+
+    async function deleteAnalysisComment(conversationId, commentId) {
+      if (!confirm("删除这条 work_assistant 分析？此操作无法恢复。")) return;
+      const response = await fetch(
+        "/api/conversations/" + encodeURIComponent(conversationId) +
+          "/comments/" + encodeURIComponent(commentId),
+        { method: "DELETE" },
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        alert(data.error || "删除分析失败");
+        return;
+      }
+      await loadConversationMessages(conversationId);
     }
 
     async function syncExternalSessions() {
@@ -896,7 +940,6 @@
         const health = await fetchWithTimeout("/health", {}, 5000);
         if (!health.ok) throw new Error(`健康检查失败（HTTP ${health.status}）`);
         await loadToolAvailability();
-        await ensureCurrentConversation();
         await loadConversations();
         showConversationIndex();
       } catch (error) {
@@ -914,9 +957,21 @@
       const html = isAssistant
         ? formatAgentText(content)
         : escapeHtml(content).replace(/\n/g, "<br>");
+      const isWorkAssistantEntry = options.analysis || (options.source || "work_assistant") === "work_assistant";
       div.className = "conversation-timeline-entry " + (isAssistant ? "assistant-entry" : "user-entry") +
+        (isWorkAssistantEntry ? " work-assistant-entry" : "") +
         (options.analysis ? " analysis-entry" : "") + (options.original ? " original-entry" : "");
-      div.innerHTML = `<header><strong>${author}</strong><span>${options.analysis ? "work_assistant 评论" : (options.original ? "原始历史" : "")}</span><time>${options.createdAt ? formatConversationTime(options.createdAt) : "刚刚"}</time></header><div class="conversation-timeline-content">${html}</div>`;
+      div.innerHTML = `<header><strong>${author}</strong><span>${options.analysis ? (options.analysisLabel || "work_assistant 评论") : (options.original ? "原始历史" : "")}</span><time>${options.createdAt ? formatConversationTime(options.createdAt) : "刚刚"}</time></header><div class="conversation-timeline-content">${html}</div>`;
+      if (options.analysis && Number.isInteger(Number(options.commentId)) && options.conversationId) {
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "conversation-analysis-delete";
+        deleteButton.textContent = "删除";
+        deleteButton.addEventListener("click", () => {
+          deleteAnalysisComment(options.conversationId, Number(options.commentId));
+        });
+        div.querySelector("header").appendChild(deleteButton);
+      }
       container.appendChild(div);
       container.scrollTop = container.scrollHeight;
       return div;
@@ -931,16 +986,25 @@
 
     function setRequestControls(active, allowRetry = false) {
       const sendButton = document.getElementById("sendBtn");
+      const analyzeButton = document.getElementById("analyzeHistoryButton");
       const stopButton = document.getElementById("stopBtn");
       const retryButton = document.getElementById("retryBtn");
       sendButton.disabled = active || AMD_CONNECTION_ONLINE === false;
+      analyzeButton.disabled = active || AMD_CONNECTION_ONLINE === false;
       stopButton.style.display = active ? "inline-flex" : "none";
       stopButton.disabled = false;
       stopButton.textContent = "停止";
       retryButton.style.display = !active && allowRetry ? "inline-flex" : "none";
     }
 
-    async function sendMessage(messageOverride = null) {
+    function analyzeHistory() {
+      sendMessage(
+        "请生成开发工作回顾，重点还原用户诉求、AI 处理、文件变更、验证情况和会话内结论。",
+        true,
+      );
+    }
+
+    async function sendMessage(messageOverride = null, historyAnalysis = false) {
       if ((currentConversationReadonly && !SUMMARY_TARGET) || ACTIVE_REQUEST_ID) return;
       const inp = document.getElementById("userInput");
       const msg = (messageOverride === null ? inp.value : messageOverride).trim();
@@ -955,11 +1019,16 @@
       ACTIVE_REQUEST_KIND = requestKind;
       ACTIVE_FETCH_CONTROLLER = new AbortController();
       inp.value = "";
-      appendMessage("user", msg, { source: "work_assistant", analysis: requestKind === "summary" });
+      if (!historyAnalysis) {
+        appendMessage("user", msg, { source: "work_assistant", analysis: requestKind === "summary" });
+      }
       setThinking(true, requestKind === "summary" ? "正在分析历史" : "正在连接 Agent");
       setRequestControls(true);
 
-      const agentDiv = appendMessage("agent", "", { source: "work_assistant", analysis: requestKind === "summary" });
+      const agentDiv = appendMessage("agent", "", {
+        source: "work_assistant", analysis: requestKind === "summary",
+        analysisLabel: requestKind === "summary" ? "会话分析" : undefined,
+      });
       const bubble = agentDiv.querySelector(".conversation-timeline-content");
       let answerText = "";
       let buffer = "";
@@ -976,7 +1045,14 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(requestKind === "summary"
-            ? { message: msg, request_id: requestId }
+            ? {
+              message: msg,
+              // The toolbar action is an explicitly broad recap.  Manually
+              // entered prompts remain `auto` so the server can select the
+              // focused RAG path once the retriever is available.
+              mode: historyAnalysis ? "full" : "auto",
+              request_id: requestId,
+            }
             : { message: msg, session_id: requestSessionId, request_id: requestId }),
           signal: ACTIVE_FETCH_CONTROLLER.signal,
           }
@@ -1056,8 +1132,14 @@
         setThinking(false);
         setRequestControls(false, requestFailed || requestCancelled);
         try {
-          if (requestKind === "summary") await loadConversationMessages(requestSessionId);
-          else await loadConversations();
+          // A reload is safe only after a successful summary was persisted. On an
+          // error/cancellation it would replace the visible partial answer and its
+          // status with the older stored comments.
+          if (requestKind === "summary" && receivedDone && !requestFailed && !requestCancelled) {
+            await loadConversationMessages(requestSessionId);
+          } else {
+            await loadConversations();
+          }
         } catch (_) {}
       }
     }
@@ -1069,12 +1151,11 @@
       stopButton.textContent = "正在停止…";
       setThinking(true, "正在停止生成");
       try {
-        if (ACTIVE_REQUEST_KIND === "summary") {
-          ACTIVE_FETCH_CONTROLLER?.abort();
-          return;
-        }
-        const url = "/api/chat/" + encodeURIComponent(ACTIVE_REQUEST_SESSION_ID) +
-          "/cancel?request_id=" + encodeURIComponent(ACTIVE_REQUEST_ID);
+        const url = ACTIVE_REQUEST_KIND === "summary"
+          ? "/api/conversations/" + encodeURIComponent(ACTIVE_REQUEST_SESSION_ID) +
+            "/summary/cancel?request_id=" + encodeURIComponent(ACTIVE_REQUEST_ID)
+          : "/api/chat/" + encodeURIComponent(ACTIVE_REQUEST_SESSION_ID) +
+            "/cancel?request_id=" + encodeURIComponent(ACTIVE_REQUEST_ID);
         const response = await fetch(url, { method: "POST" });
         if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
       } catch (error) {

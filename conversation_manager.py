@@ -470,6 +470,15 @@ class ConversationStore:
             ).fetchone()
         return dict(row)
 
+    def delete_comment(self, conversation_id: str, comment_id: int) -> bool:
+        """Delete only one analysis comment that belongs to this conversation."""
+        with self._connect() as conn:
+            deleted = conn.execute(
+                "DELETE FROM conversation_comments WHERE id = ? AND conversation_id = ?",
+                (int(comment_id), conversation_id),
+            ).rowcount
+        return bool(deleted)
+
     def rename(self, conversation_id: str, title: str) -> dict:
         normalized = " ".join(title.split())[:80]
         if not normalized:
@@ -493,18 +502,55 @@ class ConversationStore:
             raise KeyError(conversation_id)
         return self.get(conversation_id)
 
-    def delete(self, conversation_id: str) -> dict | None:
+    @staticmethod
+    def _default_source_roots(source: str) -> tuple[Path, ...]:
+        if source == "codex":
+            return (Path.home() / ".codex" / "sessions",)
+        if source == "claude":
+            return (Path.home() / ".claude" / "projects",)
+        return ()
+
+    def delete(
+        self,
+        conversation_id: str,
+        *,
+        delete_source: bool = False,
+        allowed_source_roots: tuple[Path, ...] | None = None,
+    ) -> dict | None:
         conversation = self.get(conversation_id)
         if not conversation:
             return None
+        source_deleted = False
+        if delete_source:
+            if conversation["source"] not in {"codex", "claude"} or not conversation["readonly"]:
+                raise ValueError("只有导入的 Codex 或 Claude 历史可删除本机原始记录")
+            source_path = Path(str(conversation.get("source_path") or "")).expanduser()
+            if source_path.suffix.lower() != ".jsonl" or not source_path.is_file():
+                raise ValueError("找不到可信的本机原始会话文件，无法删除")
+            resolved_source = source_path.resolve()
+            trusted_roots = allowed_source_roots or self._default_source_roots(conversation["source"])
+            if not any(
+                resolved_source.is_relative_to(Path(root).expanduser().resolve())
+                for root in trusted_roots
+                if Path(root).expanduser().is_dir()
+            ):
+                raise ValueError("原始会话文件不在允许的 Codex/Claude 历史目录中")
+            # This is deliberately a single, verified JSONL file; never delete a directory or glob.
+            resolved_source.unlink()
+            source_deleted = True
         with self._connect() as conn:
-            if conversation["readonly"] and conversation.get("source_path"):
+            if conversation["readonly"] and conversation.get("source_path") and not source_deleted:
                 conn.execute(
                     "INSERT OR REPLACE INTO ignored_external_sources VALUES (?, ?)",
                     (conversation["source_path"], _now()),
                 )
+            elif source_deleted:
+                conn.execute(
+                    "DELETE FROM ignored_external_sources WHERE source_path = ?",
+                    (conversation["source_path"],),
+                )
             conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
-        return conversation
+        return {**conversation, "source_deleted": source_deleted}
 
     def _source_is_ignored(self, path: Path) -> bool:
         with self._connect() as conn:

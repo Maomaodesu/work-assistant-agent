@@ -9,4 +9,7 @@ class ConversationMessageColorTests(unittest.TestCase):
         self.assertIn(".conversation-timeline-entry.user-entry { border-color: #7589ff;", stylesheet)
         self.assertIn(".conversation-timeline-entry.assistant-entry { border-color: #47bd89;", stylesheet)
         self.assertIn(".conversation-timeline-entry.analysis-entry { border-color: #bb86fc;", stylesheet)
+        self.assertIn(".conversation-timeline-entry.work-assistant-entry { border-color: #bb86fc;", stylesheet)
+        self.assertIn(".conversation-timeline-entry.work-assistant-entry.user-entry { border-color: #7589ff;", stylesheet)
         self.assertIn(".conversation-timeline-entry.original-entry { border-left-width: 4px; }", stylesheet)
+        self.assertIn(".conversation-analysis-delete", stylesheet)

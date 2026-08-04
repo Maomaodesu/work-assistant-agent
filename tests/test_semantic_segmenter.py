@@ -156,8 +156,19 @@ class SemanticSegmenterTests(unittest.TestCase):
             "error_details": [],
             "segmenter_version": SEGMENTER_VERSION,
         })
+        fake_chunker = SimpleNamespace(chunk_all=lambda: {
+            "total_conversations": 2,
+            "indexed_conversations": 2,
+            "unchanged_conversations": 0,
+            "pending_segmentation_conversations": 0,
+            "empty_conversations": 0,
+            "errors": 0,
+            "chunks_created": 5,
+            "error_details": [],
+        })
         with (
             patch.object(server, "semantic_conversation_segmenter", fake_segmenter),
+            patch.object(server, "retrieval_chunker", fake_chunker),
             patch.object(server.settings_service, "is_setup_complete", return_value=True),
         ):
             with TestClient(server.app) as client:
@@ -166,6 +177,7 @@ class SemanticSegmenterTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["segments_created"], 3)
+        self.assertEqual(response.json()["retrieval_index"]["chunks_created"], 5)
 
 
 if __name__ == "__main__":

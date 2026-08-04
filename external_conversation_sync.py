@@ -162,7 +162,10 @@ class ExternalConversationSync:
             resume_capable=True,
             metadata={"importer": "external_conversation_sync_v1"},
         )
-        self.store.replace_messages(conversation["conversation_id"], messages)
+        # Keep the stable source prefix intact.  Replacing the whole message
+        # list would cascade-delete previously classified segments and their
+        # work-item/context evidence whenever a live session simply appends.
+        self.store.sync_messages(conversation["conversation_id"], messages)
         self.store.save_source_state(
             path,
             source=source,

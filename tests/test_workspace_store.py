@@ -51,12 +51,14 @@ class WorkspaceStoreTests(unittest.TestCase):
 
     def test_schema_is_new_and_does_not_reuse_legacy_task_tables(self):
         info = self.store.schema_info()
-        self.assertEqual(info["version"], 5)
+        self.assertEqual(info["version"], 7)
         self.assertIn("projects", info["tables"])
         self.assertIn("work_items", info["tables"])
         self.assertIn("conversation_segments", info["tables"])
         self.assertIn("classification_runs", info["tables"])
         self.assertIn("conversation_segmentation_state", info["tables"])
+        self.assertIn("conversation_retrieval_chunks", info["tables"])
+        self.assertIn("conversation_retrieval_index_state", info["tables"])
         self.assertIn("segment_classification_state", info["tables"])
         self.assertNotIn("tasks", info["tables"])
         self.assertNotIn("plan_steps", info["tables"])

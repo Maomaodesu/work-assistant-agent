@@ -13,6 +13,12 @@ from typing import Callable
 from openai import OpenAI
 
 from settings import get_api_key, get_settings
+from work_item_retriever import (
+    DEFAULT_CANDIDATE_CHAR_BUDGET,
+    WORK_ITEM_RETRIEVER_VERSION,
+    WorkItemRetriever,
+    work_item_retriever,
+)
 from workspace_store import WorkspaceStore, workspace_store
 
 
@@ -20,6 +26,7 @@ CLASSIFIER_VERSION = "rules-amd-v1"
 MAX_SEGMENT_CHARS = 12_000
 BATCH_SIZE = 4
 MAX_BATCH_CHARS = 24_000
+MAX_BATCH_CANDIDATE_CHARS = 12_000
 CREATE_CONFIDENCE_THRESHOLD = 0.62
 
 
@@ -196,7 +203,8 @@ SYSTEM_PROMPT = """你是本地开发工作助手中的会话整理器。分析�
 2. project：项目级讨论、总体规划、架构或状态讨论，不应凭空创建具体工作项；
 3. casual：闲聊、简单确认或与项目工作无关的内容。
 
-对于 work_item，优先匹配已有工作项；只有确实是新工作时才 create。一个片段只能选择一个主要工作项。
+对于 work_item，优先匹配该片段附带的候选工作项；候选集以外的 ID 不得作为 match 结果。
+只有确实是新工作时才 create。一个片段只能选择一个主要工作项。
 只返回 JSON，不使用 Markdown。格式：
 {"decisions":[{"segment_id":"...","segment_kind":"work_item|project|casual","action":"match|create|none","matched_work_item_id":null,"title":"简洁工作项标题","item_type":"feature|function|bug|refactor|maintenance|research|other","goal":"目标","summary":"片段摘要","confidence":0.0}]}
 不得编造不存在于输入中的需求。"""
@@ -207,9 +215,11 @@ class WorkItemDiscovery:
         self,
         store: WorkspaceStore | None = None,
         client_factory: Callable[[], object] | None = None,
+        work_item_retriever_instance: WorkItemRetriever | None = None,
     ):
         self.store = store or workspace_store
         self.client_factory = client_factory or self._default_client
+        self.work_item_retriever = work_item_retriever_instance or work_item_retriever
 
     @staticmethod
     def _default_client():
@@ -223,27 +233,27 @@ class WorkItemDiscovery:
 
     def _call_amd(self, client, project: dict, items: list[dict], batch: list[dict]) -> dict:
         settings = get_settings()
+        candidate_budget = min(
+            DEFAULT_CANDIDATE_CHAR_BUDGET,
+            max(1, MAX_BATCH_CANDIDATE_CHARS // max(1, len(batch))),
+        )
         prompt = {
             "project": {"project_id": project["project_id"], "name": project["name"]},
-            "existing_work_items": [
-                {
-                    "work_item_id": item["work_item_id"],
-                    "title": item["title"],
-                    "type": item["item_type"],
-                    "status": item["status"],
-                    "goal": item["goal"][:500],
-                }
-                for item in items
-            ],
-            "segments": [
-                {
-                    "segment_id": entry["segment"]["segment_id"],
-                    "current_title": entry["segment"]["title"],
-                    "conversation": entry["model_text"],
-                }
-                for entry in batch
-            ],
+            "segments": [],
         }
+        for entry in batch:
+            retrieval = self.work_item_retriever.retrieve(
+                f"{entry['segment']['title']}\n{entry['model_text']}",
+                items,
+                char_budget=candidate_budget,
+            )
+            entry["work_item_retrieval"] = retrieval
+            prompt["segments"].append({
+                "segment_id": entry["segment"]["segment_id"],
+                "current_title": entry["segment"]["title"],
+                "conversation": entry["model_text"],
+                "work_item_candidates": retrieval["candidates"],
+            })
         response = client.chat.completions.create(
             model=settings.amd_model,
             temperature=0.1,
@@ -368,9 +378,12 @@ class WorkItemDiscovery:
             "casual_segments": 0,
             "unclassified_segments": 0,
             "credential_redaction_count": 0,
+            "candidate_work_item_count": 0,
+            "candidate_work_item_char_count": 0,
             "errors": 0,
             "error_details": [],
             "classifier_version": CLASSIFIER_VERSION,
+            "work_item_retriever_version": WORK_ITEM_RETRIEVER_VERSION,
             "cancelled": False,
         }
         pending_by_project: dict[str, list[dict]] = defaultdict(list)
@@ -528,6 +541,14 @@ class WorkItemDiscovery:
                 try:
                     response = self._call_amd(client, project, existing_items, batch)
                     result["amd_call_count"] += 1
+                    result["candidate_work_item_count"] += sum(
+                        entry["work_item_retrieval"]["candidate_count"]
+                        for entry in batch
+                    )
+                    result["candidate_work_item_char_count"] += sum(
+                        entry["work_item_retrieval"]["candidate_char_count"]
+                        for entry in batch
+                    )
                     if not checkpoint():
                         return cancelled_result()
                     decisions = {

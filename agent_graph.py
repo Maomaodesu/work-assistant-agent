@@ -44,7 +44,7 @@ def _load_api_key() -> str:
     return get_api_key()
 
 
-def get_llm(model: str | None = None) -> ChatOpenAI:
+def get_llm(model: str | None = None, *, max_tokens: int = 4096) -> ChatOpenAI:
     settings = get_settings()
     return ChatOpenAI(
         model=model or settings.amd_model,
@@ -52,7 +52,11 @@ def get_llm(model: str | None = None) -> ChatOpenAI:
         base_url=settings.amd_base_url,
         temperature=0.1,
         streaming=True,
-        timeout=settings.request_timeout_seconds,
+        # Qwen3 enables thinking by default. The hosted vLLM service accepts
+        # this OpenAI-compatible request extension to return only the answer.
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        max_tokens=max_tokens,
+        timeout=300,
     )
 
 
@@ -88,6 +92,9 @@ class AgentState(TypedDict):
     # 错误信息
     error: Optional[str]
 
+    # 仅供受控系统流程使用：跳过意图识别，直接生成自然语言回复。
+    force_chat: bool
+
 
 # ──────────────────────────────────────────────
 # 节点：路由（意图识别）
@@ -113,6 +120,9 @@ def node_route(state: AgentState) -> dict:
     如果上一轮已经识别了意图且还在收集信息中（info_ready=False, intent已设置），
     直接沿用上一轮的意图，不重新路由，避免把用户补充的信息误判为新意图。
     """
+    if state.get("force_chat"):
+        return {"intent": "chat", "info_ready": True, "gathered_info": {}}
+
     existing_intent = state.get("intent", "")
     if existing_intent in ("new_task", "check") and not state.get("info_ready", True):
         # 还在信息收集阶段，保持原意图
