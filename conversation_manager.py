@@ -236,6 +236,15 @@ class ConversationStore:
                     created_at      TEXT NOT NULL,
                     PRIMARY KEY (conversation_id, message_index)
                 );
+                CREATE TABLE IF NOT EXISTS conversation_comments (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                    prompt          TEXT NOT NULL,
+                    content         TEXT NOT NULL,
+                    created_at      TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_conversation_comments_conversation
+                ON conversation_comments(conversation_id, id);
                 CREATE INDEX IF NOT EXISTS idx_conversations_updated
                 ON conversations(updated_at DESC);
                 CREATE TABLE IF NOT EXISTS ignored_external_sources (
@@ -422,6 +431,44 @@ class ConversationStore:
                 (conversation_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def comments(self, conversation_id: str) -> list[dict]:
+        """返回 work_assistant 针对导入历史留下的分析评论。
+
+        这些评论与原始 Codex / Claude 记录分表保存，避免同步外部会话时覆盖
+        或改写原始历史。
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, prompt, content, created_at
+                FROM conversation_comments
+                WHERE conversation_id = ?
+                ORDER BY id
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_comment(self, conversation_id: str, prompt: str, content: str) -> dict:
+        if not self.get(conversation_id):
+            raise KeyError(conversation_id)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO conversation_comments(conversation_id, prompt, content, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (conversation_id, _truncate(prompt), _truncate(content), _now()),
+            )
+            row = conn.execute(
+                """
+                SELECT id, prompt, content, created_at
+                FROM conversation_comments WHERE id = ?
+                """,
+                (cursor.lastrowid,),
+            ).fetchone()
+        return dict(row)
 
     def rename(self, conversation_id: str, title: str) -> dict:
         normalized = " ".join(title.split())[:80]

@@ -6,133 +6,81 @@
   <title>会话 - Work Assistant</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-  <nav class="navbar">
-    <span class="nav-brand">⚙ Work Assistant Agent</span>
-    <div class="nav-links">
-      <a href="/" class="nav-link">工作台</a>
-      <a href="/conversations" class="nav-link active">会话</a>
-      <a href="/settings" class="nav-link">设置</a>
+<body class="conversations-page">
+  <nav class="navbar app-status-header" aria-label="系统状态">
+    <div class="app-header-start">
+      <a class="project-drawer-toggle conversation-project-menu" href="/" title="项目菜单" aria-label="返回工作台项目菜单">☰</a>
+    <span class="app-header-title">work_assistant</span>
     </div>
     <div class="nav-actions">
-      <button id="topbarSyncButton" class="topbar-sync" type="button" onclick="syncExternalSessions()">↻ 同步</button>
-      <a id="topbarAMDStatus" class="topbar-amd-status" href="/settings#amdSettings" title="查看或修改 AMD 连接配置"><i class="topbar-status-dot"></i><span>AMD 检测中</span></a>
+      <a id="topbarAMDStatus" class="topbar-amd-status" href="/settings#amdSettings" title="查看或修改大模型连接配置"><i class="topbar-status-dot"></i><span>大模型检测中</span></a>
     </div>
   </nav>
+  <nav class="app-section-tabs" aria-label="页面导航"><a href="/" class="nav-link">工作台</a><a href="/conversations" class="nav-link active">会话</a><a href="/settings" class="nav-link">设置</a></nav>
 
-  <div class="chat-layout">
-    <!-- 侧边栏：快捷操作与项目会话树 -->
-    <aside class="sidebar">
-      <div class="sidebar-primary-actions" hidden>
-        <div class="home-work-context">
-          <label>当前项目<select id="homeProjectSelect" onchange="homeProjectChanged()"><option>正在加载…</option></select></label>
-          <label>当前工作项<select id="homeWorkItemSelect" onchange="homeWorkItemChanged()"><option>请先选择项目</option></select></label>
-          <small id="homeContextHint">项目和工作项决定快捷操作的对象</small>
+  <main class="conversation-page-shell">
+    <section id="conversationIndexView" class="conversation-index-view" aria-labelledby="conversationPageTitle">
+      <header class="conversation-page-heading">
+        <div><h1 id="conversationPageTitle">会话</h1><p>集中查看本地 work_assistant、Codex 与 Claude 对话历史。</p></div>
+        <div class="conversation-heading-actions">
+          <button id="syncSessionsBtn" class="btn-secondary conversation-sync" type="button" onclick="syncExternalSessions()">同步 Codex / Claude</button>
+          <button class="send-btn" type="button" onclick="newConversation()">新建 work_assistant 会话</button>
         </div>
-        <button class="sidebar-action sidebar-action-primary" onclick="openHomeModal('homeProjectModal')">
-          <span class="sidebar-action-icon">＋</span><span>新建项目</span>
-        </button>
-        <button id="homeNewWorkItemButton" class="sidebar-action" onclick="openHomeWorkItemModal()" disabled>
-          <span class="sidebar-action-icon">◇</span><span>新建工作项</span>
-        </button>
-        <button id="homeContinueButton" class="sidebar-action" onclick="continueSelectedWorkItem()" disabled>
-          <span class="sidebar-action-icon">›</span><span>继续工作项</span>
-        </button>
-        <button id="homeOpenProjectButton" class="sidebar-action" onclick="openSelectedProjectWorkspace()" disabled>
-          <span class="sidebar-action-icon">▰</span><span>打开项目工作台</span>
-        </button>
-      </div>
-
-      <div class="sidebar-divider"></div>
-
-      <div class="conversation-heading">
-        <div><h3>会话资料</h3><small>按项目归类的 Codex 与 Claude 历史</small></div>
-        <button class="icon-btn" title="新建 AMD 辅助对话" onclick="newConversation()">＋</button>
-      </div>
-      <button id="syncSessionsBtn" class="sync-sessions-btn" onclick="syncExternalSessions()" hidden>
-        同步 Claude / Codex
-      </button>
-      <div id="conversationList" class="conversation-list">
-        <p class="conversation-loading">正在加载会话…</p>
-      </div>
-      <section id="amdConnectionCard" class="amd-connection-card status-checking" hidden>
-        <div class="amd-connection-heading">
-          <div><span id="amdStatusDot" class="amd-status-dot"></span><strong id="amdStatusLabel">正在检测 AMD</strong></div>
-          <button id="amdRecheckButton" type="button" onclick="checkAMDConnection(true)" title="重新检测">↻</button>
-        </div>
-        <p id="amdStatusMessage">正在检查 API 服务与模型…</p>
-        <div class="amd-connection-meta">
-          <span id="amdEndpointLabel">—</span>
-          <span id="amdModelLabel">—</span>
-          <span id="amdLatencyLabel"></span>
-        </div>
-        <div class="amd-connection-actions">
-          <button class="amd-config-toggle" type="button" onclick="toggleAMDQuickConfig()">修改连接配置</button>
-          <a href="/settings">完整设置</a>
-        </div>
-        <form id="amdQuickConfig" class="amd-quick-config" hidden onsubmit="saveAMDQuickConfig(event)">
-          <div class="amd-config-row amd-address-row">
-            <select id="amdProtocol" aria-label="协议"><option value="http:">http</option><option value="https:">https</option></select>
-            <input id="amdHost" required placeholder="IP 或域名" aria-label="IP 或域名">
-            <input id="amdPort" inputmode="numeric" pattern="[0-9]*" placeholder="端口" aria-label="端口">
+      </header>
+      <section class="conversation-list-surface" aria-label="会话列表">
+        <header class="conversation-list-toolbar">
+          <div class="conversation-status-filters" role="group" aria-label="归类状态">
+            <button class="conversation-filter-button active" type="button" data-state="active">全部 <span id="allConversationCount">0</span></button>
+            <button class="conversation-filter-button" type="button" data-state="classified">已归类 <span id="classifiedConversationCount">0</span></button>
+            <button class="conversation-filter-button" type="button" data-state="unclassified">待归类 <span id="unclassifiedConversationCount">0</span></button>
+            <button class="conversation-filter-button" type="button" data-state="archived">已归档 <span id="archivedConversationCount">0</span></button>
           </div>
-          <label>API 路径<input id="amdApiPath" required placeholder="/v1"></label>
-          <label>模型<input id="amdQuickModel" required placeholder="模型 ID"></label>
-          <label>API Key<input id="amdQuickApiKey" type="password" autocomplete="new-password" placeholder="留空保持现有密钥"></label>
-          <small id="amdKeyHint"></small>
-          <div class="amd-config-buttons">
-            <button type="button" onclick="toggleAMDQuickConfig(false)">取消</button>
-            <button id="amdSaveButton" type="submit">保存并重新检测</button>
+          <div class="conversation-list-controls">
+            <select id="conversationSourceFilter" class="conversation-filter-select" aria-label="来源筛选"><option value="all">全部来源</option><option value="work_assistant">work_assistant</option><option value="codex">Codex</option><option value="claude">Claude</option></select>
+            <select id="conversationProjectFilter" class="conversation-filter-select" aria-label="项目筛选"><option value="all">全部项目</option></select>
+            <select id="conversationSort" class="conversation-filter-select" aria-label="排序"><option value="updated">最近更新</option><option value="created">创建时间</option></select>
           </div>
-        </form>
+        </header>
+        <div id="conversationList" class="conversation-issue-list">
+          <p class="conversation-loading">正在加载会话…</p>
+        </div>
       </section>
-      <div class="sidebar-footer" hidden>
-        <span id="footerModelStatusDot" class="model-status-dot"></span>
-        <span id="footerModelLabel" title="{{ settings.amd_model }}">AMD · {{ settings.amd_model }}</span>
-        <a href="/settings" title="设置">⚙</a>
-      </div>
-    </aside>
+    </section>
 
-    <!-- 主聊天区 -->
-    <main class="chat-main">
+    <section id="conversationDetailView" class="conversation-detail-view" hidden aria-live="polite">
+      <header class="conversation-detail-titlebar">
+        <button class="conversation-back-button" type="button" onclick="showConversationIndex()">← 所有会话</button>
+        <div class="conversation-detail-actions"><button id="conversationArchiveButton" class="btn-secondary" type="button" hidden></button></div>
+      </header>
       <div id="appStatusBanner" class="app-status-banner" style="display:none">
         <span id="appStatusText"></span>
         <button type="button" onclick="bootstrapConversations()">重新连接</button>
       </div>
       <div id="externalNotice" class="external-session-notice" style="display:none"></div>
-      <div class="chat-messages" id="messages">
-        <div class="message agent-message" id="welcomeMessage">
-          <div class="message-bubble">
-            这里保留你的本地 Claude、Codex 和 AMD 辅助对话。<br><br>
-            你可以：
-            <ul>
-              <li>查看、归档或删除本机同步的历史会话</li>
-              <li>从可续接的 Codex/Claude 会话继续工作</li>
-              <li>新建一条 AMD 辅助对话；项目与工作项请到工作台管理</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-
-      <div class="chat-input-area">
+      <header class="conversation-detail-header">
+        <div><h1 id="conversationDetailTitle">会话</h1><div id="conversationDetailMeta" class="conversation-detail-meta"></div></div>
+        <aside id="conversationDetailProject" class="conversation-project-meta"></aside>
+      </header>
+      <div class="conversation-timeline" id="messages"></div>
+      <section class="conversation-comment-box" aria-labelledby="commentHeading">
+        <h2 id="commentHeading">让 work_assistant 分析此会话</h2>
+        <p id="conversationCommentHint">基于以上历史总结、提炼待办，或继续追问。</p>
         <div class="thinking-indicator" id="thinking" style="display:none">
           <span class="dot"></span><span class="dot"></span><span class="dot"></span>
           <span id="thinking-text">思考中...</span>
         </div>
-        <div class="input-row">
+        <div class="conversation-comment-editor">
           <textarea
             id="userInput"
-            class="chat-input"
-            placeholder="输入消息，Shift+Enter 换行，Enter 发送..."
-            rows="2"
+            class="conversation-comment-input"
+            placeholder="例如：总结这段对话，并列出下一步行动…"
+            rows="5"
           ></textarea>
-          <button id="retryBtn" class="retry-btn" style="display:none" onclick="retryLastMessage()">重试</button>
-          <button id="stopBtn" class="stop-btn" style="display:none" onclick="stopGeneration()">停止</button>
-          <button id="sendBtn" class="send-btn" onclick="sendMessage()">发送</button>
+          <div class="conversation-comment-actions"><span>使用 Markdown 格式化评论</span><div><button id="retryBtn" class="retry-btn" style="display:none" onclick="retryLastMessage()">重试</button><button id="stopBtn" class="stop-btn" style="display:none" onclick="stopGeneration()">停止</button><button id="sendBtn" class="send-btn" onclick="sendMessage()">分析历史</button></div></div>
         </div>
-      </div>
-    </main>
-  </div>
+      </section>
+    </section>
+  </main>
 
   <div id="homeProjectModal" class="workspace-modal" hidden>
     <form class="workspace-modal-card" onsubmit="createHomeProject(event)">
@@ -182,6 +130,9 @@
     let ACTIVE_CONVERSATION_ID = SESSION_ID;
     let currentConversationReadonly = false;
     let externalConversation = null;
+    let SUMMARY_TARGET = null;
+    let CONVERSATIONS = [];
+    let CONVERSATION_FILTER_STATE = "active";
     let conversationGroupState = loadConversationGroupState();
     let ACTIVE_REQUEST_ID = null;
     let ACTIVE_REQUEST_SESSION_ID = null;
@@ -565,109 +516,76 @@
       const response = await fetchWithTimeout("/api/conversations");
       if (!response.ok) throw new Error(`加载会话失败（HTTP ${response.status}）`);
       const conversations = await response.json();
+      CONVERSATIONS = conversations;
       const list = document.getElementById("conversationList");
       list.innerHTML = "";
-
-      function renderConversation(item) {
-        const row = document.createElement("div");
-        row.className = "conversation-item" + (item.id === ACTIVE_CONVERSATION_ID ? " active" : "");
-        row.onclick = () => selectConversation(item.id);
-
-        const sourceLabel = item.source === "work_assistant" ? "WA" : item.source === "claude" ? "Claude" : "Codex";
-        const safeJsId = escapeHtml(escapeJs(item.id));
-        const safeJsTitle = escapeHtml(escapeJs(item.title));
-        const archiveTitle = item.archived ? "恢复" : "归档";
-        const archiveIcon = item.archived ? "↥" : "▣";
-        const updatedAt = formatConversationTime(item.updated_at);
-        row.innerHTML = `
-          <div class="conversation-main">
-            <span class="conversation-title">${escapeHtml(item.title)}</span>
-            <span class="conversation-meta">
-              <b class="source-${item.source}">${sourceLabel}</b>
-              <time datetime="${escapeHtml(item.updated_at || "")}">${updatedAt}</time>
-            </span>
-          </div>
-          <div class="conversation-actions">
-            <button title="重命名" onclick="event.stopPropagation(); renameConversation('${safeJsId}', '${safeJsTitle}')">✎</button>
-            <button title="${archiveTitle}" onclick="event.stopPropagation(); archiveConversation('${safeJsId}', ${!item.archived})">${archiveIcon}</button>
-            <button title="删除" onclick="event.stopPropagation(); deleteConversation('${safeJsId}')">×</button>
-          </div>`;
-        return row;
-      }
-
-      function renderGroup(groupKey, title, items, path, defaultExpanded = false) {
-        if (!items.length) return;
-        items.sort((a, b) => conversationTimestamp(b) - conversationTimestamp(a));
-        const containsActiveConversation = items.some(item => item.id === ACTIVE_CONVERSATION_ID);
-        const isExpanded = groupKey in conversationGroupState
-          ? conversationGroupState[groupKey]
-          : containsActiveConversation || defaultExpanded;
-        const section = document.createElement("section");
-        section.className = "conversation-group " + (isExpanded ? "expanded" : "collapsed");
-        const heading = document.createElement("button");
-        heading.type = "button";
-        heading.className = "conversation-group-title";
-        heading.title = path || "";
-        heading.setAttribute("aria-expanded", String(isExpanded));
-        const groupIcon = groupKey.startsWith("project:") ? "▰" : groupKey === "archived" ? "⌑" : "◇";
-        heading.innerHTML = `
-          <span class="conversation-group-label">
-            <i class="conversation-group-chevron">›</i>
-            <i class="conversation-group-icon">${groupIcon}</i>
-            <span>${escapeHtml(title)}</span>
-          </span>
-          <em>${items.length}</em>`;
-        heading.onclick = () => toggleConversationGroup(section, heading, groupKey);
-        const headingRow = document.createElement("div");
-        headingRow.className = "conversation-group-heading-row";
-        headingRow.appendChild(heading);
-        if (groupKey.startsWith("project:")) {
-          const launchButton = document.createElement("button");
-          launchButton.type = "button";
-          launchButton.className = "project-launch-toggle";
-          launchButton.title = "打开项目工作台";
-          launchButton.textContent = "•••";
-          const menu = buildProjectLaunchMenu(groupKey.slice("project:".length), path);
-          launchButton.onclick = event => {
-            event.stopPropagation();
-            document.querySelectorAll(".project-launch-menu.open").forEach(item => {
-              if (item !== menu) item.classList.remove("open");
-            });
-            menu.classList.toggle("open");
-          };
-          headingRow.appendChild(launchButton);
-          section.appendChild(headingRow);
-          section.appendChild(menu);
-        } else {
-          section.appendChild(headingRow);
-        }
-        const children = document.createElement("div");
-        children.className = "conversation-group-children";
-        items.forEach(item => children.appendChild(renderConversation(item)));
-        section.appendChild(children);
-        list.appendChild(section);
-      }
-
-      const active = conversations.filter(item => !item.archived);
-      const projects = new Map();
-      active.filter(item => item.group_type === "project").forEach(item => {
-        const key = item.project_key || item.project_path;
-        if (!projects.has(key)) projects.set(key, []);
-        projects.get(key).push(item);
+      updateConversationFilterOptions(conversations);
+      updateConversationCounts(conversations);
+      const source = document.getElementById("conversationSourceFilter").value;
+      const project = document.getElementById("conversationProjectFilter").value;
+      const sort = document.getElementById("conversationSort").value;
+      const visible = conversations.filter(item => {
+        if (CONVERSATION_FILTER_STATE === "active" && item.archived) return false;
+        if (CONVERSATION_FILTER_STATE === "classified" && (item.archived || item.group_type !== "project")) return false;
+        if (CONVERSATION_FILTER_STATE === "unclassified" && (item.archived || item.group_type === "project")) return false;
+        if (CONVERSATION_FILTER_STATE === "archived" && !item.archived) return false;
+        if (source !== "all" && item.source !== source) return false;
+        if (project !== "all" && (item.project_key || item.project_path) !== project) return false;
+        return true;
+      }).sort((a, b) => {
+        const field = sort === "created" ? "created_at" : "updated_at";
+        return conversationTimestamp(b, field) - conversationTimestamp(a, field);
       });
-      [...projects.entries()]
-        .map(([key, items]) => [key, items.sort((a, b) => conversationTimestamp(b) - conversationTimestamp(a))])
-        .sort(([, a], [, b]) => conversationTimestamp(b[0]) - conversationTimestamp(a[0]))
-        .forEach(([key, items]) => renderGroup(
-          "project:" + key,
-          items[0].project_name || "未命名项目",
-          items,
-          items[0].project_path
-        ));
+      visible.forEach(item => list.appendChild(renderConversationIssue(item)));
+      if (!visible.length) list.innerHTML = '<p class="conversation-list-empty">没有符合当前筛选条件的会话。</p>';
+    }
 
-      renderGroup("casual", "随意会话", active.filter(item => item.group_type !== "project"), "", true);
-      renderGroup("archived", "已归档", conversations.filter(item => item.archived));
-      if (!conversations.length) list.innerHTML = '<p class="conversation-loading">暂无会话</p>';
+    function conversationSourceLabel(source) {
+      return source === "work_assistant" ? "work_assistant" : source === "claude" ? "Claude" : "Codex";
+    }
+
+    function renderConversationIssue(item) {
+      const row = document.createElement("article");
+      row.className = "conversation-issue-row" + (item.id === ACTIVE_CONVERSATION_ID ? " active" : "");
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      row.onclick = () => selectConversation(item.id);
+      row.onkeydown = event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectConversation(item.id); } };
+      const safeJsId = escapeHtml(escapeJs(item.id));
+      const safeJsTitle = escapeHtml(escapeJs(item.title));
+      const project = item.project_name
+        ? `<span class="conversation-project-link">${escapeHtml(item.project_name)}</span>`
+        : '<span class="conversation-unclassified">待归类</span>';
+      const readonly = item.readonly ? '<span class="conversation-readonly">只读历史</span>' : '';
+      row.innerHTML = `
+        <div class="conversation-issue-main">
+          <div class="conversation-issue-title"><span class="conversation-source-badge source-${escapeHtml(item.source)}">${conversationSourceLabel(item.source)}</span><strong>${escapeHtml(item.title)}</strong>${readonly}</div>
+          <div class="conversation-issue-meta">${project}<span>更新于 ${formatConversationTime(item.updated_at)}</span><span>${item.message_count || 0} 条消息</span></div>
+        </div>
+        <div class="conversation-issue-actions">
+          <button title="重命名" aria-label="重命名" onclick="event.stopPropagation(); renameConversation('${safeJsId}', '${safeJsTitle}')">编辑</button>
+          <button title="${item.archived ? "恢复" : "归档"}" onclick="event.stopPropagation(); archiveConversation('${safeJsId}', ${!item.archived})">${item.archived ? "恢复" : "归档"}</button>
+        </div>`;
+      return row;
+    }
+
+    function updateConversationCounts(conversations) {
+      const active = conversations.filter(item => !item.archived);
+      document.getElementById("allConversationCount").textContent = active.length;
+      document.getElementById("classifiedConversationCount").textContent = active.filter(item => item.group_type === "project").length;
+      document.getElementById("unclassifiedConversationCount").textContent = active.filter(item => item.group_type !== "project").length;
+      document.getElementById("archivedConversationCount").textContent = conversations.filter(item => item.archived).length;
+    }
+
+    function updateConversationFilterOptions(conversations) {
+      const select = document.getElementById("conversationProjectFilter");
+      const selected = select.value;
+      const projects = new Map();
+      conversations.filter(item => item.project_name).forEach(item => projects.set(item.project_key || item.project_path, item.project_name));
+      select.innerHTML = '<option value="all">全部项目</option>' + [...projects.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1], "zh-CN"))
+        .map(([key, name]) => `<option value="${escapeHtml(key)}">${escapeHtml(name)}</option>`).join("");
+      select.value = projects.has(selected) ? selected : "all";
     }
 
     function toolIsAvailable(action) {
@@ -763,8 +681,8 @@
       }
     }
 
-    function conversationTimestamp(item) {
-      const value = Date.parse(item.updated_at || item.created_at || "");
+    function conversationTimestamp(item, field = "updated_at") {
+      const value = Date.parse(item[field] || item.updated_at || item.created_at || "");
       return Number.isNaN(value) ? 0 : value;
     }
 
@@ -784,13 +702,11 @@
       return date.toLocaleDateString("zh-CN", { year: "2-digit", month: "numeric", day: "numeric" });
     }
 
-    function toggleConversationGroup(section, heading, groupKey) {
-      const expanded = section.classList.contains("expanded");
-      section.classList.toggle("expanded", !expanded);
-      section.classList.toggle("collapsed", expanded);
-      heading.setAttribute("aria-expanded", String(!expanded));
-      conversationGroupState[groupKey] = !expanded;
-      saveConversationGroupState();
+    function showConversationIndex() {
+      document.getElementById("conversationDetailView").hidden = true;
+      document.getElementById("conversationIndexView").hidden = false;
+      document.title = "会话 - Work Assistant";
+      window.scrollTo(0, 0);
     }
 
     async function loadConversationMessages(conversationId) {
@@ -802,9 +718,8 @@
       const conversation = data.conversation;
       ACTIVE_CONVERSATION_ID = conversation.id;
       currentConversationReadonly = conversation.readonly || conversation.archived;
-      const bridgeSupported = conversation.readonly && !conversation.archived &&
-        ["codex", "claude"].includes(conversation.source) && Boolean(conversation.project_path);
-      externalConversation = bridgeSupported ? conversation : null;
+      SUMMARY_TARGET = conversation.readonly && !conversation.archived ? conversation : null;
+      externalConversation = null;
 
       if (!conversation.readonly && !conversation.archived) {
         SESSION_ID = conversation.id;
@@ -822,40 +737,58 @@
         input.placeholder = "已归档会话为只读模式";
       } else if (conversation.readonly) {
         notice.style.display = "block";
-        if (bridgeSupported) {
-          notice.textContent = "这是从 " + conversation.source.toUpperCase() + " 导入的本地会话" +
-            " · 网页输入会直接续接原会话；原始记录由 CLI 自己保存。";
-          input.disabled = false;
-          sendButton.disabled = false;
-          input.placeholder = "向本机 " + conversation.source.toUpperCase() + " 会话发送消息…";
-        } else {
-          notice.textContent = "这是从 " + conversation.source.toUpperCase() + " 导入的只读会话" +
-            (conversation.project_path ? " · " + conversation.project_path : "") + "。该会话缺少可用的本地项目目录。";
-          input.disabled = true;
-          sendButton.disabled = true;
-          input.placeholder = "外部会话为只读模式";
-        }
+        notice.textContent = "这是从 " + conversationSourceLabel(conversation.source) + " 导入的只读历史；work_assistant 的分析会作为独立评论保留在下方，不会改写原始记录。";
+        input.disabled = false;
+        sendButton.disabled = false;
+        input.placeholder = "例如：总结这段对话，并列出下一步行动…";
       } else {
         notice.style.display = "none";
         input.disabled = false;
         sendButton.disabled = false;
-        input.placeholder = "输入消息，Shift+Enter 换行，Enter 发送...";
+        input.placeholder = "输入消息，Shift+Enter 换行，Enter 发送…";
       }
 
+      renderConversationDetailHeader(conversation);
       const container = document.getElementById("messages");
       container.innerHTML = "";
       if (!data.messages.length) {
-        const welcome = appendMessage("agent", welcomeHtml());
+        const welcome = appendMessage("agent", "这是新的 work_assistant 会话。输入你的问题即可开始。");
         welcome.id = "welcomeMessage";
       } else {
         data.messages.forEach(message => {
-          const html = message.role === "assistant"
-            ? formatAgentText(message.content)
-            : escapeHtml(message.content).replace(/\n/g, "<br>");
-          appendMessage(message.role === "assistant" ? "agent" : "user", html);
+          appendMessage(message.role === "assistant" ? "agent" : "user", message.content, {
+            source: conversation.source,
+            createdAt: message.created_at,
+            original: conversation.readonly,
+          });
         });
       }
+      (data.comments || []).forEach(comment => {
+        appendMessage("user", comment.prompt, { source: "work_assistant", createdAt: comment.created_at, analysis: true });
+        appendMessage("agent", comment.content, { source: "work_assistant", createdAt: comment.created_at, analysis: true });
+      });
       await loadConversations();
+      document.getElementById("conversationIndexView").hidden = true;
+      document.getElementById("conversationDetailView").hidden = false;
+      document.title = `${conversation.title} - 会话 - Work Assistant`;
+    }
+
+    function renderConversationDetailHeader(conversation) {
+      document.getElementById("conversationDetailTitle").textContent = conversation.title || "未命名会话";
+      document.getElementById("conversationDetailMeta").innerHTML =
+        `<span class="conversation-source-badge source-${escapeHtml(conversation.source)}">${conversationSourceLabel(conversation.source)}</span>` +
+        (conversation.readonly ? '<span class="conversation-readonly">只读历史</span>' : '<span class="conversation-local">可继续对话</span>') +
+        `<span>更新于 ${formatConversationTime(conversation.updated_at)}</span>`;
+      const project = document.getElementById("conversationDetailProject");
+      project.innerHTML = `<strong>所属项目</strong><span>${escapeHtml(conversation.project_name || "待归类")}</span>` +
+        (conversation.project_path ? `<small title="${escapeHtml(conversation.project_path)}">${escapeHtml(conversation.project_path)}</small>` : '<small>同步时会根据工作目录自动匹配；无法判断的会话会留在待归类。</small>');
+      const archive = document.getElementById("conversationArchiveButton");
+      archive.hidden = false;
+      archive.textContent = conversation.archived ? "恢复会话" : "归档会话";
+      archive.onclick = async () => { await archiveConversation(conversation.id, !conversation.archived); showConversationIndex(); };
+      document.getElementById("conversationCommentHint").textContent = conversation.readonly
+        ? "原始记录保持只读。work_assistant 的提问与结论会作为独立评论附在这条历史下。"
+        : "继续与 work_assistant 对话；回复会保存在此会话中。";
     }
 
     async function selectConversation(conversationId) {
@@ -947,12 +880,12 @@
         AMD_CONNECTION_ONLINE = online;
         control.classList.toggle("online", online);
         control.classList.toggle("offline", !online);
-        control.querySelector("span").textContent = online ? "AMD 在线" : "AMD 离线";
+        control.querySelector("span").textContent = online ? "大模型在线" : "大模型离线";
         control.title = status.message || "查看或修改 AMD 连接配置";
       } catch (_) {
         AMD_CONNECTION_ONLINE = false;
         control.classList.add("offline");
-        control.querySelector("span").textContent = "AMD 未连接";
+        control.querySelector("span").textContent = "大模型未连接";
       }
       applyAMDAvailability();
     }
@@ -964,17 +897,26 @@
         if (!health.ok) throw new Error(`健康检查失败（HTTP ${health.status}）`);
         await loadToolAvailability();
         await ensureCurrentConversation();
-        await loadConversationMessages(SESSION_ID);
+        await loadConversations();
+        showConversationIndex();
       } catch (error) {
         showConnectionError(error.message || String(error));
       }
     }
 
-    function appendMessage(role, html) {
+    function appendMessage(role, content, options = {}) {
       const container = document.getElementById("messages");
-      const div = document.createElement("div");
-      div.className = "message " + (role === "user" ? "user-message" : "agent-message");
-      div.innerHTML = '<div class="message-bubble">' + html + '</div>';
+      const div = document.createElement("article");
+      const isAssistant = role === "agent" || role === "assistant";
+      const author = isAssistant
+        ? (options.analysis ? "work_assistant" : conversationSourceLabel(options.source || "work_assistant"))
+        : "你";
+      const html = isAssistant
+        ? formatAgentText(content)
+        : escapeHtml(content).replace(/\n/g, "<br>");
+      div.className = "conversation-timeline-entry " + (isAssistant ? "assistant-entry" : "user-entry") +
+        (options.analysis ? " analysis-entry" : "") + (options.original ? " original-entry" : "");
+      div.innerHTML = `<header><strong>${author}</strong><span>${options.analysis ? "work_assistant 评论" : (options.original ? "原始历史" : "")}</span><time>${options.createdAt ? formatConversationTime(options.createdAt) : "刚刚"}</time></header><div class="conversation-timeline-content">${html}</div>`;
       container.appendChild(div);
       container.scrollTop = container.scrollHeight;
       return div;
@@ -991,7 +933,7 @@
       const sendButton = document.getElementById("sendBtn");
       const stopButton = document.getElementById("stopBtn");
       const retryButton = document.getElementById("retryBtn");
-      sendButton.disabled = active || (!externalConversation && AMD_CONNECTION_ONLINE === false);
+      sendButton.disabled = active || AMD_CONNECTION_ONLINE === false;
       stopButton.style.display = active ? "inline-flex" : "none";
       stopButton.disabled = false;
       stopButton.textContent = "停止";
@@ -999,13 +941,13 @@
     }
 
     async function sendMessage(messageOverride = null) {
-      if ((currentConversationReadonly && !externalConversation) || ACTIVE_REQUEST_ID) return;
+      if ((currentConversationReadonly && !SUMMARY_TARGET) || ACTIVE_REQUEST_ID) return;
       const inp = document.getElementById("userInput");
       const msg = (messageOverride === null ? inp.value : messageOverride).trim();
       if (!msg) return;
 
-      const requestSessionId = externalConversation ? externalConversation.id : SESSION_ID;
-      const requestKind = externalConversation ? "external" : "amd";
+      const requestSessionId = SUMMARY_TARGET ? SUMMARY_TARGET.id : SESSION_ID;
+      const requestKind = SUMMARY_TARGET ? "summary" : "amd";
       const requestId = "request-" + Date.now() + "-" + Math.random().toString(16).slice(2);
       LAST_REQUEST_MESSAGE = msg;
       ACTIVE_REQUEST_ID = requestId;
@@ -1013,12 +955,12 @@
       ACTIVE_REQUEST_KIND = requestKind;
       ACTIVE_FETCH_CONTROLLER = new AbortController();
       inp.value = "";
-      appendMessage("user", escapeHtml(msg).replace(/\n/g, "<br>"));
-      setThinking(true, requestKind === "external" ? "正在连接本机 CLI" : "正在连接 Agent");
+      appendMessage("user", msg, { source: "work_assistant", analysis: requestKind === "summary" });
+      setThinking(true, requestKind === "summary" ? "正在分析历史" : "正在连接 Agent");
       setRequestControls(true);
 
-      const agentDiv = appendMessage("agent", "");
-      const bubble = agentDiv.querySelector(".message-bubble");
+      const agentDiv = appendMessage("agent", "", { source: "work_assistant", analysis: requestKind === "summary" });
+      const bubble = agentDiv.querySelector(".conversation-timeline-content");
       let answerText = "";
       let buffer = "";
       let receivedDone = false;
@@ -1027,13 +969,13 @@
 
       try {
         const response = await fetch(
-          requestKind === "external"
-            ? "/api/external-conversations/" + encodeURIComponent(requestSessionId) + "/chat"
+          requestKind === "summary"
+            ? "/api/conversations/" + encodeURIComponent(requestSessionId) + "/summary"
             : "/api/chat",
           {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestKind === "external"
+          body: JSON.stringify(requestKind === "summary"
             ? { message: msg, request_id: requestId }
             : { message: msg, session_id: requestSessionId, request_id: requestId }),
           signal: ACTIVE_FETCH_CONTROLLER.signal,
@@ -1113,7 +1055,10 @@
         ACTIVE_REQUEST_KIND = "amd";
         setThinking(false);
         setRequestControls(false, requestFailed || requestCancelled);
-        try { await loadConversations(); } catch (_) {}
+        try {
+          if (requestKind === "summary") await loadConversationMessages(requestSessionId);
+          else await loadConversations();
+        } catch (_) {}
       }
     }
 
@@ -1124,10 +1069,12 @@
       stopButton.textContent = "正在停止…";
       setThinking(true, "正在停止生成");
       try {
-        const url = ACTIVE_REQUEST_KIND === "external"
-          ? "/api/external-conversations/" + encodeURIComponent(ACTIVE_REQUEST_SESSION_ID) + "/cancel"
-          : "/api/chat/" + encodeURIComponent(ACTIVE_REQUEST_SESSION_ID) +
-            "/cancel?request_id=" + encodeURIComponent(ACTIVE_REQUEST_ID);
+        if (ACTIVE_REQUEST_KIND === "summary") {
+          ACTIVE_FETCH_CONTROLLER?.abort();
+          return;
+        }
+        const url = "/api/chat/" + encodeURIComponent(ACTIVE_REQUEST_SESSION_ID) +
+          "/cancel?request_id=" + encodeURIComponent(ACTIVE_REQUEST_ID);
         const response = await fetch(url, { method: "POST" });
         if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
       } catch (error) {
@@ -1159,6 +1106,14 @@
         e.preventDefault();
         sendMessage();
       }
+    });
+    document.querySelectorAll(".conversation-filter-button").forEach(button => button.addEventListener("click", () => {
+      CONVERSATION_FILTER_STATE = button.dataset.state;
+      document.querySelectorAll(".conversation-filter-button").forEach(item => item.classList.toggle("active", item === button));
+      loadConversations();
+    }));
+    ["conversationSourceFilter", "conversationProjectFilter", "conversationSort"].forEach(id => {
+      document.getElementById(id).addEventListener("change", () => loadConversations());
     });
     document.addEventListener("click", event => {
       if (!event.target.closest(".project-launch-menu, .project-launch-toggle")) {

@@ -43,21 +43,25 @@ class WorkspacePageTests(unittest.TestCase):
         self.assertIn("新建工作项", response.text)
         self.assertIn("会话工作项发现", response.text)
         self.assertIn("开始增量分析", response.text)
-        self.assertIn("style.css?v=workspace-source-review-20260802", response.text)
+        self.assertIn("style.css?v=project-definition-20260804", response.text)
         self.assertIn("已请求暂停", response.text)
         self.assertIn("增量重试", response.text)
         self.assertIn("项目级讨论", response.text)
+        self.assertNotIn('data-filter="project_discussions"', response.text)
         self.assertIn("查看来源片段", response.text)
         self.assertIn("合并选中项", response.text)
         self.assertIn("copyProjectDirectories", response.text)
         self.assertIn("saveProjectDirectories", response.text)
         self.assertIn("Agent 项目目录", response.text)
         self.assertIn("workspace-analysis-technical", response.text)
+        self.assertIn("PROJECT DEFINITION", response.text)
+        self.assertIn("关联会话", response.text)
+        self.assertIn("提炼项目定义草稿", response.text)
         self.assertIn("copyAnalysisRunId", response.text)
         self.assertIn("setWorkItemFilter", response.text)
         self.assertIn("查看 ${suggestedCount} 个待确认工作项", response.text)
-        self.assertIn("toggleProjectOpenMenu", response.text)
-        self.assertIn("在资源管理器中显示", response.text)
+        self.assertNotIn('id="projectOpenMenuButton"', response.text)
+        self.assertNotIn("在资源管理器中显示", response.text)
         self.assertNotIn("resumeConversation", response.text)
         self.assertIn("上下文包", response.text)
         self.assertNotIn("launchContextPackage", response.text)
@@ -114,6 +118,29 @@ class WorkspacePageTests(unittest.TestCase):
         self.assertEqual([item["path"] for item in roots], [str(self.frontend), str(self.backend)])
         self.assertTrue(roots[0]["is_primary"])
         self.assertFalse(roots[1]["is_primary"])
+
+    def test_project_definition_can_be_saved_confirmed_and_read_from_project(self):
+        project = self.store.create_project("Definition", [str(self.backend)])
+        payload = {
+            "summary": "把历史讨论沉淀为项目上下文",
+            "goal": "支持跨会话持续开发",
+            "scope": "首期生成项目定义和工作项",
+            "non_goals": "不替代 Codex 编程",
+            "acceptance_criteria": "用户确认后可长期查看",
+            "constraints": "只读取本机已同步会话",
+            "status": "confirmed",
+        }
+
+        saved = self.client.put(
+            f"/api/workspace/projects/{project['project_id']}/definition", json=payload
+        )
+        detail = self.client.get(f"/api/workspace/projects/{project['project_id']}")
+
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.json()["status"], "confirmed")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["definition"]["goal"], payload["goal"])
+        self.assertEqual(detail.json()["definition"]["status"], "confirmed")
 
     def test_context_package_api_generates_reads_and_reuses_local_package(self):
         project = self.store.create_project("Context API", [str(self.backend)])

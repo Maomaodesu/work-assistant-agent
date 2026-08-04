@@ -99,18 +99,16 @@ class ServerStartupTests(unittest.TestCase):
         self.assertIs(uvicorn_run.call_args.args[0], server.app)
         self.assertFalse(uvicorn_run.call_args.kwargs["reload"])
 
-    def test_page_has_bounded_bootstrap_and_visible_reconnect(self):
+    def test_page_has_bounded_bootstrap_and_topbar_model_status(self):
         template = Path("templates/index.html").read_text(encoding="utf-8")
         self.assertIn('id="appStatusBanner"', template)
         self.assertIn("function fetchWithTimeout(", template)
         self.assertIn('fetchWithTimeout("/health", {}, 5000)', template)
         self.assertIn("重新连接", template)
-        self.assertIn('id="amdConnectionCard"', template)
-        self.assertIn('id="amdHost"', template)
-        self.assertIn('id="amdPort"', template)
-        self.assertIn('id="amdQuickApiKey"', template)
-        self.assertIn('"/api/amd/config"', template)
-        self.assertIn("checkAMDConnection", template)
+        self.assertIn('id="topbarAMDStatus"', template)
+        self.assertIn("大模型检测中", template)
+        self.assertIn('href="/settings#amdSettings"', template)
+        self.assertNotIn('id="amdConnectionCard"', template)
 
     def test_start_script_uses_project_virtual_environment(self):
         script = Path("start.ps1").read_text(encoding="utf-8")

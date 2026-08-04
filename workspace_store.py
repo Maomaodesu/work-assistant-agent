@@ -10,7 +10,7 @@ from pathlib import Path
 from settings import get_settings
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 PROJECT_STATUSES = {"active", "archived"}
 WORK_ITEM_TYPES = {
     "feature", "function", "bug", "refactor", "maintenance", "research", "other"
@@ -100,6 +100,26 @@ class WorkspaceStore:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_project_one_primary_root
                 ON project_roots(project_id) WHERE is_primary = 1;
+
+                CREATE TABLE IF NOT EXISTS project_definitions (
+                    project_id           TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,
+                    status               TEXT NOT NULL DEFAULT 'draft'
+                                         CHECK(status IN ('draft','confirmed','ignored')),
+                    goal                 TEXT NOT NULL DEFAULT '',
+                    scope                TEXT NOT NULL DEFAULT '',
+                    non_goals            TEXT NOT NULL DEFAULT '',
+                    acceptance_criteria  TEXT NOT NULL DEFAULT '',
+                    constraints          TEXT NOT NULL DEFAULT '',
+                    summary              TEXT NOT NULL DEFAULT '',
+                    source               TEXT NOT NULL DEFAULT 'inferred'
+                                         CHECK(source IN ('inferred','manual')),
+                    source_segment_ids_json TEXT NOT NULL DEFAULT '[]',
+                    source_run_id        TEXT NOT NULL DEFAULT '',
+                    created_at           TEXT NOT NULL,
+                    updated_at           TEXT NOT NULL,
+                    confirmed_at         TEXT,
+                    ignored_at           TEXT
+                );
 
                 CREATE TABLE IF NOT EXISTS work_items (
                     work_item_id   TEXT PRIMARY KEY,
@@ -374,7 +394,7 @@ class WorkspaceStore:
         item = dict(row)
         for key in (
             "metadata_json", "details_json", "decision_json", "redaction_json",
-            "request_json",
+            "request_json", "source_segment_ids_json",
         ):
             if key in item:
                 try:
@@ -505,6 +525,105 @@ class WorkspaceStore:
             raise WorkspaceStoreError(f"保存项目目录失败：{exc}") from exc
         return self.get_project(project_id)
 
+    def get_project_definition(self, project_id: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM project_definitions WHERE project_id=?", (project_id,)
+            ).fetchone()
+        return self._row(row)
+
+    def save_project_definition(
+        self,
+        project_id: str,
+        *,
+        goal: str = "",
+        scope: str = "",
+        non_goals: str = "",
+        acceptance_criteria: str = "",
+        constraints: str = "",
+        summary: str = "",
+        status: str = "draft",
+        source: str = "manual",
+        source_segment_ids: list[str] | None = None,
+        source_run_id: str = "",
+    ) -> dict:
+        if not self.get_project(project_id):
+            raise WorkspaceStoreError("项目不存在")
+        if status not in {"draft", "confirmed", "ignored"}:
+            raise WorkspaceStoreError("项目定义状态不正确")
+        if source not in {"manual", "inferred"}:
+            raise WorkspaceStoreError("项目定义来源不正确")
+        now = _now()
+        source_ids = list(dict.fromkeys(
+            str(item).strip() for item in (source_segment_ids or []) if str(item).strip()
+        ))
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT created_at FROM project_definitions WHERE project_id=?", (project_id,)
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO project_definitions(
+                    project_id, status, goal, scope, non_goals, acceptance_criteria,
+                    constraints, summary, source, source_segment_ids_json, source_run_id,
+                    created_at, updated_at, confirmed_at, ignored_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_id) DO UPDATE SET
+                    status=excluded.status, goal=excluded.goal, scope=excluded.scope,
+                    non_goals=excluded.non_goals,
+                    acceptance_criteria=excluded.acceptance_criteria,
+                    constraints=excluded.constraints, summary=excluded.summary,
+                    source=excluded.source,
+                    source_segment_ids_json=excluded.source_segment_ids_json,
+                    source_run_id=excluded.source_run_id, updated_at=excluded.updated_at,
+                    confirmed_at=excluded.confirmed_at, ignored_at=excluded.ignored_at
+                """,
+                (
+                    project_id, status, goal.strip()[:4000], scope.strip()[:4000],
+                    non_goals.strip()[:4000], acceptance_criteria.strip()[:4000],
+                    constraints.strip()[:4000], summary.strip()[:4000], source,
+                    _json(source_ids), source_run_id.strip()[:160],
+                    existing["created_at"] if existing else now, now,
+                    now if status == "confirmed" else None,
+                    now if status == "ignored" else None,
+                ),
+            )
+            conn.execute(
+                "UPDATE projects SET updated_at=?, last_active_at=? WHERE project_id=?",
+                (now, now, project_id),
+            )
+        return self.get_project_definition(project_id)
+
+    def confirm_project_definition(self, project_id: str) -> dict:
+        definition = self.get_project_definition(project_id)
+        if not definition:
+            raise WorkspaceStoreError("没有可确认的项目定义草稿")
+        return self.save_project_definition(
+            project_id,
+            goal=definition["goal"], scope=definition["scope"],
+            non_goals=definition["non_goals"],
+            acceptance_criteria=definition["acceptance_criteria"],
+            constraints=definition["constraints"], summary=definition["summary"],
+            status="confirmed", source=definition["source"],
+            source_segment_ids=definition.get("source_segment_ids", []),
+            source_run_id=definition.get("source_run_id", ""),
+        )
+
+    def ignore_project_definition(self, project_id: str) -> dict:
+        definition = self.get_project_definition(project_id)
+        if not definition:
+            raise WorkspaceStoreError("没有可忽略的项目定义草稿")
+        return self.save_project_definition(
+            project_id,
+            goal=definition["goal"], scope=definition["scope"],
+            non_goals=definition["non_goals"],
+            acceptance_criteria=definition["acceptance_criteria"],
+            constraints=definition["constraints"], summary=definition["summary"],
+            status="ignored", source=definition["source"],
+            source_segment_ids=definition.get("source_segment_ids", []),
+            source_run_id=definition.get("source_run_id", ""),
+        )
+
     def get_project(self, project_id: str) -> dict | None:
         with self._connect() as conn:
             project = self._row(conn.execute(
@@ -517,6 +636,7 @@ class WorkspaceStore:
                 (project_id,),
             )]
         project["roots"] = roots
+        project["definition"] = self.get_project_definition(project_id)
         return project
 
     def list_projects(self, status: str | None = None) -> list[dict]:

@@ -7,20 +7,16 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="setup-body">
-  <nav class="navbar">
-    <span class="nav-brand">⚙ Work Assistant Agent</span>
-    {% if not is_setup %}
-    <div class="nav-links">
-      <a href="/" class="nav-link">工作台</a>
-      <a href="/conversations" class="nav-link">会话</a>
-      <a href="/settings" class="nav-link active">设置</a>
+  <nav class="navbar app-status-header" aria-label="系统状态">
+    <div class="app-header-start">
+      <a class="project-drawer-toggle conversation-project-menu" href="/" title="项目菜单" aria-label="返回工作台项目菜单">☰</a>
+      <span class="app-header-title">work_assistant</span>
     </div>
     <div class="nav-actions">
-      <button id="topbarSyncButton" class="topbar-sync" type="button" onclick="syncAllConversations()">↻ 同步</button>
-      <a id="topbarAMDStatus" class="topbar-amd-status" href="#amdSettings" title="AMD 连接配置"><i class="topbar-status-dot"></i><span>AMD 检测中</span></a>
+      <a id="topbarAMDStatus" class="topbar-amd-status" href="#amdSettings" title="查看或修改大模型连接配置"><i class="topbar-status-dot"></i><span>大模型检测中</span></a>
     </div>
-    {% endif %}
   </nav>
+  {% if not is_setup %}<nav class="app-section-tabs" aria-label="页面导航"><a href="/" class="nav-link">工作台</a><a href="/conversations" class="nav-link">会话</a><a href="/settings" class="nav-link active">设置</a></nav>{% endif %}
 
   <main class="setup-layout">
     <section class="setup-card">
@@ -299,11 +295,11 @@
         const online = response.ok && Boolean(status.online);
         control.classList.toggle("online", online);
         control.classList.toggle("offline", !online);
-        control.querySelector("span").textContent = online ? "AMD 在线" : "AMD 离线";
+        control.querySelector("span").textContent = online ? "大模型在线" : "大模型离线";
         control.title = status.message || "AMD 连接配置";
       } catch (_) {
         control.classList.add("offline");
-        control.querySelector("span").textContent = "AMD 未连接";
+        control.querySelector("span").textContent = "大模型未连接";
       }
     }
 

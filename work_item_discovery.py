@@ -336,6 +336,7 @@ class WorkItemDiscovery:
         limit: int | None = None,
         run_id: str | None = None,
         control=None,
+        finalize_run: bool = True,
     ) -> dict:
         segments = self.store.list_segments(project_id)
         if limit is not None:
@@ -587,15 +588,16 @@ class WorkItemDiscovery:
                             })
                 progress()
 
-        final_status = "failed" if result["errors"] else "completed"
-        self.store.update_classification_run(
-            run_id,
-            status=final_status,
-            stage="finished",
-            error_message=(
-                f"{result['errors']} 个片段分析失败" if result["errors"] else ""
-            ),
-        )
+        if finalize_run:
+            final_status = "failed" if result["errors"] else "completed"
+            self.store.update_classification_run(
+                run_id,
+                status=final_status,
+                stage="finished",
+                error_message=(
+                    f"{result['errors']} 个片段分析失败" if result["errors"] else ""
+                ),
+            )
         result["run"] = self.store.get_classification_run(run_id)
         return result
 

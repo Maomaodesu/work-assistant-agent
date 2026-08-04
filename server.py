@@ -138,6 +138,11 @@ class ChatRequest(BaseModel):
     request_id: str | None = None
 
 
+class ConversationSummaryRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=12_000)
+    request_id: str | None = None
+
+
 class ExternalCliChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12_000)
     request_id: str | None = None
@@ -193,6 +198,16 @@ class WorkspaceProjectCreateRequest(BaseModel):
 
 class WorkspaceProjectRootsUpdateRequest(BaseModel):
     root_paths: list[str] = Field(min_length=1)
+
+
+class WorkspaceProjectDefinitionRequest(BaseModel):
+    summary: str = Field(default="", max_length=4_000)
+    goal: str = Field(default="", max_length=4_000)
+    scope: str = Field(default="", max_length=4_000)
+    non_goals: str = Field(default="", max_length=4_000)
+    acceptance_criteria: str = Field(default="", max_length=4_000)
+    constraints: str = Field(default="", max_length=4_000)
+    status: str = "confirmed"
 
 
 class WorkspaceWorkItemCreateRequest(BaseModel):
@@ -436,6 +451,150 @@ async def api_chat(req: ChatRequest, request: Request):
     )
 
 
+def _conversation_summary_prompt(conversation: dict, messages: list[dict], request: str) -> str:
+    """把只读历史作为本次 work_assistant 评论的上下文，而不改写原会话。"""
+    source_name = {"codex": "Codex", "claude": "Claude"}.get(
+        conversation.get("source"), "外部"
+    )
+    transcript = []
+    total_chars = 0
+    # 保留最新的内容，避免把超长导入历史塞满模型上下文。
+    for item in reversed(messages):
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        line = f"{('用户' if item.get('role') == 'user' else source_name)}：{content}"
+        if total_chars + len(line) > 48_000:
+            transcript.append("（更早的历史已省略）")
+            break
+        transcript.append(line)
+        total_chars += len(line)
+    transcript.reverse()
+    project = conversation.get("project_name") or "未归类"
+    return (
+        "你是 work_assistant，正在为一段导入的本地对话撰写分析评论。"
+        "只根据下方历史回答用户的请求；不要假装你参与了原始会话，"
+        "不要修改、续接或执行原会话中的命令。用中文给出清晰、可执行的结论。\n\n"
+        f"来源：{source_name}\n项目：{project}\n标题：{conversation.get('title') or '未命名会话'}\n\n"
+        "原始历史：\n"
+        + "\n\n".join(transcript)
+        + f"\n\n用户希望你：{request.strip()}"
+    )
+
+
+@app.post("/api/conversations/{conversation_id:path}/summary")
+async def api_summarize_conversation(
+    conversation_id: str,
+    req: ConversationSummaryRequest,
+    request: Request,
+):
+    """让 work_assistant 对只读导入历史追加独立分析评论。"""
+    conversation = conversation_store.get(conversation_id)
+    if not conversation:
+        return JSONResponse({"error": "会话不存在"}, status_code=404)
+    if not conversation.get("readonly") or conversation.get("archived"):
+        return JSONResponse({"error": "只有未归档的 Codex 或 Claude 历史可在此添加分析评论"}, status_code=400)
+
+    session_id = f"summary:{conversation_id}"
+    session_lock = _session_locks.setdefault(session_id, asyncio.Lock())
+    if session_lock.locked():
+        return JSONResponse({"error": "该会话正在生成分析评论，请稍候"}, status_code=409)
+    await session_lock.acquire()
+
+    invoke_input = build_turn_input(
+        _conversation_summary_prompt(conversation, conversation_store.messages(conversation_id), req.message)
+    )
+    request_id = req.request_id or f"summary-{uuid.uuid4()}"
+    cancel_event = threading.Event()
+    active_generation = ActiveGeneration(request_id=request_id, cancel_event=cancel_event, started_at=time.monotonic())
+    _active_generations[session_id] = active_generation
+    loop = asyncio.get_running_loop()
+    event_queue: asyncio.Queue = asyncio.Queue()
+    callback = GraphStreamCallback(loop, event_queue, cancel_event)
+
+    def execute_graph():
+        try:
+            outcome = ("complete", run_agent_stream_worker(invoke_input, session_id, callback))
+        except GenerationCancelled:
+            outcome = ("cancelled", None)
+        except Exception as exc:
+            outcome = ("failed", exc)
+        loop.call_soon_threadsafe(event_queue.put_nowait, outcome)
+
+    worker_future = loop.run_in_executor(None, execute_graph)
+
+    async def cleanup_generation():
+        try:
+            await worker_future
+        except Exception:
+            pass
+        if _active_generations.get(session_id) is active_generation:
+            _active_generations.pop(session_id, None)
+        if session_lock.locked():
+            session_lock.release()
+
+    async def generate() -> AsyncGenerator[str, None]:
+        terminal_event_sent = False
+        deadline = loop.time() + get_settings().request_timeout_seconds
+        last_heartbeat = loop.time()
+        try:
+            yield sse_event(json.dumps({"request_id": request_id}, ensure_ascii=False), event="request")
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    cancel_event.set()
+                    error_message = "请求超时，分析已停止；请检查大模型连接后重试。"
+                    yield sse_event(error_message, event="error")
+                    yield sse_event("", event="done")
+                    terminal_event_sent = True
+                    break
+                try:
+                    event_type, data = await asyncio.wait_for(event_queue.get(), timeout=min(0.25, remaining))
+                except asyncio.TimeoutError:
+                    if await request.is_disconnected():
+                        cancel_event.set()
+                        break
+                    if loop.time() - last_heartbeat >= 15:
+                        yield ": keep-alive\n\n"
+                        last_heartbeat = loop.time()
+                    continue
+
+                if event_type == "stage":
+                    yield sse_event(json.dumps(data, ensure_ascii=False), event="stage")
+                elif event_type == "token":
+                    yield sse_event(data, event="message")
+                elif event_type == "complete":
+                    output = (data or {}).get("output", "") or "（work_assistant 没有返回内容）"
+                    conversation_store.add_comment(conversation_id, req.message, output)
+                    if not callback.streamed_answer:
+                        yield sse_event(output, event="message")
+                    yield sse_event("", event="done")
+                    terminal_event_sent = True
+                    break
+                elif event_type == "cancelled":
+                    yield sse_event("已停止生成", event="cancelled")
+                    yield sse_event("", event="done")
+                    terminal_event_sent = True
+                    break
+                elif event_type == "failed":
+                    yield sse_event(f"Agent 出错：{data}", event="error")
+                    yield sse_event("", event="done")
+                    terminal_event_sent = True
+                    break
+        finally:
+            if not terminal_event_sent:
+                cancel_event.set()
+            if worker_future.done():
+                await cleanup_generation()
+            else:
+                asyncio.create_task(cleanup_generation())
+
+    return StreamingResponse(
+        generate(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/chat/{session_id}/cancel")
 async def api_cancel_chat(session_id: str, request_id: str | None = None):
     active = _active_generations.get(session_id)
@@ -622,10 +781,14 @@ async def api_sync_all_conversations():
     loop = asyncio.get_running_loop()
     legacy_result = await loop.run_in_executor(None, conversation_store.import_external)
     workspace_result = await loop.run_in_executor(None, external_conversation_sync.sync)
+    # 新同步的会话应立即按其工作目录归入项目；否则用户必须先额外执行一次
+    # “匹配项目”或手动关联，项目页面看起来就像没有发现新对话。
+    match_result = await loop.run_in_executor(None, conversation_project_matcher.match_all)
     return JSONResponse({
         "ok": workspace_result["errors"] == 0,
         "conversations": legacy_result,
         "workspace": workspace_result,
+        "project_matching": match_result,
     })
 
 
@@ -710,7 +873,7 @@ async def api_workspace_unassigned_conversations():
     conversations = workspace_store.list_conversations()
     return JSONResponse([
         conversation for conversation in conversations
-        if conversation["project_match_state"] != "matched"
+        if conversation["project_match_state"] not in {"matched", "manual"}
     ])
 
 
@@ -757,6 +920,50 @@ async def api_workspace_update_project_roots(
 ):
     try:
         return JSONResponse(workspace_store.update_project_roots(project_id, req.root_paths))
+    except WorkspaceStoreError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.get("/api/workspace/projects/{project_id}/definition")
+async def api_workspace_project_definition(project_id: str):
+    if not workspace_store.get_project(project_id):
+        return JSONResponse({"error": "项目不存在"}, status_code=404)
+    return JSONResponse(workspace_store.get_project_definition(project_id))
+
+
+@app.put("/api/workspace/projects/{project_id}/definition")
+async def api_workspace_save_project_definition(
+    project_id: str,
+    req: WorkspaceProjectDefinitionRequest,
+):
+    try:
+        existing = workspace_store.get_project_definition(project_id) or {}
+        definition = workspace_store.save_project_definition(
+            project_id,
+            summary=req.summary, goal=req.goal, scope=req.scope,
+            non_goals=req.non_goals,
+            acceptance_criteria=req.acceptance_criteria,
+            constraints=req.constraints, status=req.status, source="manual",
+            source_segment_ids=existing.get("source_segment_ids", []),
+            source_run_id=existing.get("source_run_id", ""),
+        )
+        return JSONResponse(definition)
+    except WorkspaceStoreError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/workspace/projects/{project_id}/definition/confirm")
+async def api_workspace_confirm_project_definition(project_id: str):
+    try:
+        return JSONResponse(workspace_store.confirm_project_definition(project_id))
+    except WorkspaceStoreError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/workspace/projects/{project_id}/definition/ignore")
+async def api_workspace_ignore_project_definition(project_id: str):
+    try:
+        return JSONResponse(workspace_store.ignore_project_definition(project_id))
     except WorkspaceStoreError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -1081,6 +1288,7 @@ async def api_conversation_messages(conversation_id: str):
     return JSONResponse({
         "conversation": conversation,
         "messages": conversation_store.messages(conversation_id),
+        "comments": conversation_store.comments(conversation_id),
     })
 
 
@@ -1334,11 +1542,8 @@ async def page_conversations(request: Request):
 
 @app.get("/tasks", response_class=HTMLResponse)
 async def page_tasks(request: Request):
-    tasks = list_tasks()
-    return templates.TemplateResponse(request, "tasks.html", {
-        "tasks": [_task_to_dict(t) for t in tasks],
-        "settings": settings_service.public_view(),
-    })
+    """任务页已从主界面移除；保留旧地址并回到工作台。"""
+    return RedirectResponse("/", status_code=307)
 
 
 @app.get("/workspace", response_class=HTMLResponse)

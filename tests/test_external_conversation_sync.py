@@ -153,9 +153,14 @@ class ExternalConversationSyncTests(unittest.TestCase):
             "sources": {}, "error_details": [],
         })
         fake_conversations = SimpleNamespace(import_external=lambda: {"claude": 1, "codex": 2})
+        fake_matcher = SimpleNamespace(match_all=lambda: {
+            "total": 3, "matched": 2, "manual": 0, "ambiguous": 0,
+            "unassigned": 1, "no_path": 0, "project_count": 1,
+        })
         with (
             patch.object(server, "external_conversation_sync", fake_sync),
             patch.object(server, "conversation_store", fake_conversations),
+            patch.object(server, "conversation_project_matcher", fake_matcher),
             patch.object(server.settings_service, "is_setup_complete", return_value=True),
         ):
             with TestClient(server.app) as client:
@@ -165,6 +170,7 @@ class ExternalConversationSyncTests(unittest.TestCase):
         self.assertTrue(response.json()["ok"])
         self.assertEqual(response.json()["conversations"]["codex"], 2)
         self.assertEqual(response.json()["workspace"]["imported"], 1)
+        self.assertEqual(response.json()["project_matching"]["matched"], 2)
 
 
 if __name__ == "__main__":

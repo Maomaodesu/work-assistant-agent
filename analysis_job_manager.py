@@ -7,6 +7,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 
 from external_conversation_sync import ExternalConversationSync
+from project_definition_discovery import ProjectDefinitionDiscovery
 from project_matcher import ConversationProjectMatcher
 from semantic_segmenter import SemanticConversationSegmenter
 from work_item_discovery import WorkItemDiscovery, work_item_discovery
@@ -55,6 +56,7 @@ class AnalysisJobManager:
         conversation_sync: ExternalConversationSync | None = None,
         project_matcher: ConversationProjectMatcher | None = None,
         segmenter: SemanticConversationSegmenter | None = None,
+        definition_discovery: ProjectDefinitionDiscovery | None = None,
         *,
         recover_interrupted: bool = True,
     ):
@@ -64,6 +66,7 @@ class AnalysisJobManager:
         self.conversation_sync = conversation_sync or ExternalConversationSync(self.store)
         self.project_matcher = project_matcher or ConversationProjectMatcher(self.store)
         self.segmenter = segmenter or SemanticConversationSegmenter(self.store)
+        self.definition_discovery = definition_discovery or ProjectDefinitionDiscovery(self.store)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="work-analysis")
         self._jobs: dict[str, AnalysisJob] = {}
         self._lock = threading.RLock()
@@ -142,12 +145,52 @@ class AnalysisJobManager:
             if not job.control.checkpoint():
                 self._mark_cancelled(job.run_id)
                 return
-            self.discovery.discover(
+            discovery_result = self.discovery.discover(
                 project_id=job.request.get("project_id"),
                 force=bool(job.request.get("force")),
                 limit=job.request.get("limit"),
                 run_id=job.run_id,
                 control=job.control,
+                finalize_run=False,
+            )
+            if not job.control.checkpoint():
+                self._mark_cancelled(job.run_id)
+                return
+            run = self.store.get_classification_run(job.run_id)
+            # 兼容注入式发现器：它们可能自行完成或终止任务；此时不再追加定义提炼。
+            if run and run["status"] in {"completed", "failed", "cancelled"}:
+                return
+            self.store.update_classification_run(job.run_id, stage="project_definition")
+            definition_result = self.definition_discovery.discover(
+                project_id=job.request.get("project_id"), run_id=job.run_id,
+                control=job.control,
+            )
+            if not job.control.checkpoint():
+                self._mark_cancelled(job.run_id)
+                return
+            run = self.store.get_classification_run(job.run_id)
+            if run and run["status"] == "cancelled":
+                return
+            discovery_errors = (
+                discovery_result.get("errors", 0)
+                if isinstance(discovery_result, dict) else 0
+            )
+            definition_errors = definition_result.get("errors", [])
+            error_message = (
+                f"{discovery_errors} 个片段分析失败" if discovery_errors else ""
+            )
+            if definition_errors:
+                definition_note = f"项目定义草稿提取失败 {len(definition_errors)} 个项目"
+                error_message = "; ".join(filter(None, [error_message, definition_note]))
+            self.store.update_classification_run(
+                job.run_id,
+                status="failed" if discovery_errors else "completed",
+                stage="finished",
+                amd_call_count=(run.get("amd_call_count", 0) if run else 0)
+                + definition_result.get("amd_call_count", 0),
+                credential_redaction_count=(run.get("credential_redaction_count", 0) if run else 0)
+                + definition_result.get("credential_redaction_count", 0),
+                error_message=error_message,
             )
         except Exception as exc:
             run = self.store.get_classification_run(job.run_id)

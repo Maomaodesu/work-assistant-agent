@@ -188,13 +188,11 @@ class WorkspaceLauncherTests(unittest.TestCase):
             configured_paths={},
         )
 
-    def test_workspace_and_settings_expose_workspace_controls(self):
+    def test_settings_expose_workspace_controls_without_repository_launch_chrome(self):
         workspace = Path("templates/workspace.html").read_text(encoding="utf-8")
         setup = Path("templates/setup.html").read_text(encoding="utf-8")
-        self.assertIn("launchWorkspaceProject", workspace)
-        self.assertIn("资源管理器", workspace)
-        self.assertIn("终端", workspace)
-        self.assertIn("默认编辑器", workspace)
+        self.assertNotIn('id="projectOpenMenuButton"', workspace)
+        self.assertNotIn("在资源管理器中显示", workspace)
         self.assertIn("编辑器与 AI 工具", setup)
         self.assertIn("discoverLocalTools", setup)
 

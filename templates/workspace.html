@@ -4,24 +4,26 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>工作台 - Work Assistant</title>
-  <link rel="stylesheet" href="/static/style.css?v=workspace-source-review-20260802">
+  <link rel="stylesheet" href="/static/style.css?v=project-definition-20260804">
 </head>
 <body class="home-page">
-  <nav class="navbar">
-    <span class="nav-brand">⚙ Work Assistant Agent</span>
-    <div class="nav-links">
-      <a href="/" class="nav-link active">工作台</a>
-      <a href="/conversations" class="nav-link">会话</a>
-      <a href="/settings" class="nav-link">设置</a>
+  <nav class="navbar app-status-header" aria-label="系统状态">
+    <div class="app-header-start">
+      <button id="projectDrawerToggle" class="project-drawer-toggle" type="button" aria-expanded="false" aria-controls="projectDrawer" onclick="toggleProjectDrawer()" title="项目菜单">☰</button>
+      <span class="app-header-title">work_assistant</span>
     </div>
     <div class="nav-actions">
-      <button id="topbarSyncButton" class="topbar-sync" type="button" onclick="syncAllConversations()">↻ 同步</button>
-      <a id="topbarAMDStatus" class="topbar-amd-status" href="/settings#amdSettings" title="查看或修改 AMD 连接配置"><i class="topbar-status-dot"></i><span>AMD 检测中</span></a>
+      <a id="topbarAMDStatus" class="topbar-amd-status" href="/settings#amdSettings" title="查看或修改大模型连接配置"><i class="topbar-status-dot"></i><span>大模型检测中</span></a>
     </div>
+  </nav>
+  <nav class="app-section-tabs" aria-label="页面导航">
+    <a href="/" class="nav-link active">工作台</a>
+    <a href="/conversations" class="nav-link">会话</a>
+    <a href="/settings" class="nav-link">设置</a>
   </nav>
 
   <div class="workspace-layout">
-    <aside class="workspace-projects-panel">
+    <aside id="projectDrawer" class="workspace-projects-panel gh-project-switcher" aria-label="项目菜单">
       <div class="workspace-panel-heading">
         <div>
           <span class="workspace-kicker">WORKSPACE</span>
@@ -34,6 +36,7 @@
       </div>
       <div class="workspace-panel-note">一个项目可以包含多个代码目录</div>
     </aside>
+    <div id="projectDrawerBackdrop" class="project-drawer-backdrop" hidden onclick="closeProjectDrawer()"></div>
 
     <main class="workspace-main">
       <section id="workspaceEmpty" class="workspace-empty">
@@ -43,33 +46,28 @@
         <button class="send-btn" type="button" onclick="openModal('projectModal')">添加项目</button>
       </section>
 
-      <section id="workspaceProjectDetail" class="workspace-project-detail" hidden>
-        <header class="workspace-detail-header">
-          <div>
-            <span class="workspace-kicker">PROJECT</span>
+      <section id="workspaceProjectDetail" class="workspace-project-detail gh-repository" hidden>
+        <header class="workspace-detail-header gh-repo-header">
+          <div class="gh-repo-identity">
             <h1 id="projectTitle"></h1>
-            <p id="projectDescription"></p>
-            <div id="projectConversationSummary" class="workspace-conversation-summary" aria-label="关联会话概览"></div>
-          </div>
-          <div class="workspace-project-actions">
-            <div class="workspace-project-open-menu">
-              <button id="projectOpenMenuButton" class="btn-secondary" type="button" aria-expanded="false" aria-controls="projectOpenMenu" onclick="toggleProjectOpenMenu()">打开项目 <span aria-hidden="true">⌄</span></button>
-              <div id="projectOpenMenu" class="workspace-project-open-options" hidden>
-                <button type="button" onclick="launchWorkspaceProject('explorer')">在资源管理器中显示</button>
-                <button type="button" onclick="launchWorkspaceProject('terminal')">在终端中打开</button>
-                <button type="button" onclick="launchWorkspaceProject('default_editor')">用默认编辑器打开</button>
-              </div>
-            </div>
-            <button class="send-btn" onclick="openWorkItemModal()">新建工作项</button>
           </div>
         </header>
 
-        <div class="workspace-summary-grid">
-          <div class="workspace-summary-card"><strong id="summaryActive">0</strong><span>进行与待办</span></div>
-          <div class="workspace-summary-card suggested"><strong id="summarySuggested">0</strong><span>待确认</span></div>
-          <div class="workspace-summary-card completed"><strong id="summaryCompleted">0</strong><span>已完成</span></div>
-          <div class="workspace-summary-card muted"><strong id="summaryIgnored">0</strong><span>已忽略</span></div>
-        </div>
+        <p id="projectDescription" class="gh-repo-description"></p>
+        <div id="projectConversationSummary" class="workspace-conversation-summary gh-repo-meta" aria-label="关联会话概览"></div>
+
+        <div class="gh-repository-content">
+          <div class="gh-repository-primary">
+        <section class="workspace-definition-card" aria-labelledby="projectDefinitionHeading">
+          <div class="workspace-definition-heading">
+            <div>
+              <span class="workspace-kicker">PROJECT DEFINITION</span>
+              <h3 id="projectDefinitionHeading">项目定义</h3>
+            </div>
+            <div id="projectDefinitionActions" class="workspace-definition-actions"></div>
+          </div>
+          <div id="projectDefinitionBody" class="workspace-definition-body"></div>
+        </section>
 
         <section class="workspace-analysis-card">
           <div class="workspace-analysis-heading">
@@ -98,7 +96,50 @@
           </div>
         </section>
 
-        <section class="workspace-roots-section">
+        <section class="workspace-items-section">
+          <div class="workspace-items-heading gh-work-items-heading">
+            <div>
+              <span class="workspace-kicker">WORK ITEMS</span>
+              <h2>工作项</h2>
+            </div>
+            <div class="workspace-items-controls">
+              <div class="workspace-tabs" id="workItemTabs">
+                <button class="active" data-filter="formal">进行中</button>
+                <button data-filter="suggested">待确认 <em id="suggestedTabCount">0</em></button>
+                <button data-filter="ignored">已忽略</button>
+                <button data-filter="completed">已完成</button>
+              </div>
+              <button class="workspace-add-work-item" type="button" onclick="openWorkItemModal()" aria-label="新建工作项">
+                <span aria-hidden="true">+</span> 新建工作项
+              </button>
+            </div>
+          </div>
+          <div id="mergeToolbar" class="workspace-merge-toolbar" hidden>
+            <span>已选择 <strong id="mergeSelectedCount">0</strong> 个待确认工作项</span>
+            <button class="btn-secondary" type="button" onclick="openMergeModal()">合并选中项</button>
+          </div>
+          <div id="workItemList" class="workspace-item-list"></div>
+        </section>
+          </div>
+
+          <aside class="gh-repository-sidebar">
+            <section class="gh-sidebar-section">
+              <h2>项目概览</h2>
+              <p>本地 AI 工作项目空间，持续沉淀会话、定义与可执行工作项。</p>
+              <div class="workspace-summary-grid gh-summary-grid">
+                <div class="workspace-summary-card"><strong id="summaryActive">0</strong><span>进行与待办</span></div>
+                <div class="workspace-summary-card suggested"><strong id="summarySuggested">0</strong><span>待确认</span></div>
+                <div class="workspace-summary-card completed"><strong id="summaryCompleted">0</strong><span>已完成</span></div>
+                <div class="workspace-summary-card muted"><strong id="summaryIgnored">0</strong><span>已忽略</span></div>
+              </div>
+              <div class="workspace-project-progress" aria-label="项目完成进度">
+                <div><span>项目完成进度</span><strong id="summaryProgressText">0%</strong></div>
+                <div class="workspace-project-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="summaryProgressBar"></i></div>
+                <small id="summaryProgressHint">暂无已确认工作项</small>
+              </div>
+            </section>
+
+        <section class="workspace-roots-section gh-sidebar-section">
           <div class="workspace-roots-heading">
             <div>
               <h3>Agent 项目目录</h3>
@@ -111,27 +152,8 @@
           </div>
           <textarea id="projectRoots" class="workspace-root-editor" rows="4" spellcheck="false" aria-label="Agent 项目目录，每行一个目录"></textarea>
         </section>
-
-        <section class="workspace-items-section">
-          <div class="workspace-items-heading">
-            <div>
-              <span class="workspace-kicker">WORK ITEMS</span>
-              <h2>工作项</h2>
-            </div>
-            <div class="workspace-tabs" id="workItemTabs">
-              <button class="active" data-filter="formal">进行中的工作项</button>
-              <button data-filter="suggested">待确认 <em id="suggestedTabCount">0</em></button>
-              <button data-filter="ignored">已忽略</button>
-              <button data-filter="completed">已完成</button>
-              <button data-filter="project_discussions">项目级讨论</button>
-            </div>
-          </div>
-          <div id="mergeToolbar" class="workspace-merge-toolbar" hidden>
-            <span>已选择 <strong id="mergeSelectedCount">0</strong> 个待确认工作项</span>
-            <button class="btn-secondary" type="button" onclick="openMergeModal()">合并选中项</button>
-          </div>
-          <div id="workItemList" class="workspace-item-list"></div>
-        </section>
+          </aside>
+        </div>
       </section>
     </main>
   </div>
@@ -169,6 +191,28 @@
       <label>截止日期（可选）<input id="newWorkItemDeadline" class="form-input short-input" type="date"></label>
       <div class="workspace-modal-actions"><button type="button" class="btn-secondary" onclick="closeModal('workItemModal')">取消</button><button class="send-btn" type="submit">创建工作项</button></div>
     </form>
+  </div>
+
+  <div id="projectDefinitionModal" class="workspace-modal" hidden>
+    <form class="workspace-modal-card" onsubmit="saveProjectDefinition(event)">
+      <div class="workspace-modal-heading"><h2>编辑项目定义</h2><button type="button" onclick="closeModal('projectDefinitionModal')">×</button></div>
+      <p class="workspace-modal-context">保存即表示确认这份定义。后续会话扫描不会自动覆盖已确认内容。</p>
+      <label>一句话概述<input id="definitionSummary" class="form-input" maxlength="4000" placeholder="例如：将 Codex 讨论沉淀为可持续管理的项目工作空间"></label>
+      <label>目标<textarea id="definitionGoal" class="form-input form-textarea" rows="3"></textarea></label>
+      <label>首期范围<textarea id="definitionScope" class="form-input form-textarea" rows="3"></textarea></label>
+      <label>暂不做什么<textarea id="definitionNonGoals" class="form-input form-textarea" rows="3"></textarea></label>
+      <label>验收标准<textarea id="definitionAcceptance" class="form-input form-textarea" rows="3"></textarea></label>
+      <label>约束与关键决策<textarea id="definitionConstraints" class="form-input form-textarea" rows="3"></textarea></label>
+      <div class="workspace-modal-actions"><button type="button" class="btn-secondary" onclick="closeModal('projectDefinitionModal')">取消</button><button class="send-btn" type="submit">保存并确认</button></div>
+    </form>
+  </div>
+
+  <div id="unassignedConversationModal" class="workspace-modal" hidden>
+    <div class="workspace-modal-card">
+      <div class="workspace-modal-heading"><h2>关联已同步会话</h2><button type="button" onclick="closeModal('unassignedConversationModal')">×</button></div>
+      <p class="workspace-modal-context">当 Codex 会话没有对应项目目录时，手动关联后再运行增量分析即可提炼项目定义。</p>
+      <div id="unassignedConversationList" class="workspace-unassigned-list"></div>
+    </div>
   </div>
 
   <div id="sourceModal" class="workspace-modal" hidden>
@@ -235,7 +279,6 @@
     let currentFilter = "formal";
     let currentAnalysisRun = null;
     let analysisPollTimer = null;
-    let projectDiscussions = [];
     let activeContextPackage = null;
     let completingWorkItemId = null;
     const selectedMergeItems = new Set();
@@ -268,11 +311,11 @@
         const online = response.ok && Boolean(status.online);
         control.classList.toggle("online", online);
         control.classList.toggle("offline", !online);
-        control.querySelector("span").textContent = online ? "AMD 在线" : "AMD 离线";
+        control.querySelector("span").textContent = online ? "大模型在线" : "大模型离线";
         control.title = status.message || "查看或修改 AMD 连接配置";
       } catch (_) {
         control.classList.add("offline");
-        control.querySelector("span").textContent = "AMD 未连接";
+        control.querySelector("span").textContent = "大模型未连接";
       }
     }
 
@@ -284,7 +327,8 @@
         const response = await fetch("/api/conversations/sync-all", { method: "POST" });
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || "同步失败");
-        toast(`已同步会话，项目索引更新 ${data.workspace.imported || 0} 条`, "success");
+        const matched = data.project_matching?.matched || 0;
+        toast(`已同步会话，自动归入项目 ${matched} 条`, "success");
         await loadWorkspace(selectedProject?.project_id || null);
       } catch (error) {
         toast(error.message || "同步失败", "error");
@@ -326,7 +370,6 @@
       selectedProject = await api("/api/workspace/projects/" + encodeURIComponent(projectId));
       localStorage.setItem(SELECTED_PROJECT_KEY, projectId);
       workItems = await api("/api/workspace/work-items?project_id=" + encodeURIComponent(projectId) + "&include_ignored=true");
-      projectDiscussions = await api(`/api/workspace/projects/${encodeURIComponent(projectId)}/segments?segment_kind=project&limit=200`);
       selectedMergeItems.clear();
       document.getElementById("workspaceEmpty").hidden = true;
       document.getElementById("workspaceProjectDetail").hidden = false;
@@ -340,11 +383,145 @@
       document.getElementById("summarySuggested").textContent = selectedProject.work_item_counts.suggested;
       document.getElementById("summaryCompleted").textContent = selectedProject.work_item_counts.completed;
       document.getElementById("summaryIgnored").textContent = selectedProject.work_item_counts.ignored;
+      const confirmedWorkItemCount = selectedProject.active_work_item_count + selectedProject.work_item_counts.completed;
+      const projectCompletion = confirmedWorkItemCount
+        ? Math.round((selectedProject.work_item_counts.completed / confirmedWorkItemCount) * 100)
+        : 0;
+      document.getElementById("summaryProgressText").textContent = `${projectCompletion}%`;
+      document.getElementById("summaryProgressBar").style.width = `${projectCompletion}%`;
+      document.querySelector(".workspace-project-progress-track").setAttribute("aria-valuenow", String(projectCompletion));
+      document.getElementById("summaryProgressHint").textContent = confirmedWorkItemCount
+        ? `已完成 ${selectedProject.work_item_counts.completed} / ${confirmedWorkItemCount} 个已确认工作项`
+        : "暂无已确认工作项";
       document.getElementById("suggestedTabCount").textContent = selectedProject.work_item_counts.suggested;
       document.getElementById("projectRoots").value = selectedProject.roots.map(root => root.path).join("\n");
       renderProjectList();
+      renderProjectDefinition();
       renderWorkItems();
       await loadProjectAnalysis(projectId);
+    }
+
+    function renderProjectDefinition() {
+      const body = document.getElementById("projectDefinitionBody");
+      const actions = document.getElementById("projectDefinitionActions");
+      const definition = selectedProject?.definition;
+      if (!definition) {
+        body.innerHTML = '<p class="workspace-definition-empty">先在 Codex 中讨论项目，然后运行增量分析。系统会从已关联的项目级讨论生成一份待确认草稿；如果会话没有项目目录，可手动关联后再分析。</p>';
+        actions.innerHTML = '<button type="button" onclick="openUnassignedConversations()">关联会话</button><button type="button" class="send-btn" onclick="openProjectDefinitionEditor()">手动补充</button>';
+        return;
+      }
+      const status = definition.status || "draft";
+      const labels = {draft:"待确认草稿", confirmed:"已确认", ignored:"已忽略"};
+      const fields = [
+        ["目标", definition.goal], ["首期范围", definition.scope],
+        ["暂不做什么", definition.non_goals], ["验收标准", definition.acceptance_criteria],
+        ["约束与关键决策", definition.constraints],
+      ].filter(([, value]) => value);
+      const sourceAction = (definition.source_segment_ids || []).length
+        ? '<button type="button" onclick="openDefinitionSources()">查看来源讨论</button>' : "";
+      if (status === "draft") {
+        actions.innerHTML = `${sourceAction}<button type="button" onclick="openProjectDefinitionEditor()">编辑</button><button type="button" onclick="ignoreProjectDefinition()">忽略</button><button type="button" class="send-btn" onclick="confirmProjectDefinition()">确认定义</button>`;
+      } else {
+        actions.innerHTML = `${sourceAction}<button type="button" onclick="openUnassignedConversations()">关联会话</button><button type="button" class="send-btn" onclick="openProjectDefinitionEditor()">编辑定义</button>`;
+      }
+      body.innerHTML = `
+        <span class="workspace-definition-status ${status}">${labels[status] || status}</span>
+        ${definition.summary ? `<p class="workspace-definition-summary">${escapeHtml(definition.summary)}</p>` : ""}
+        <div class="workspace-definition-grid">${fields.map(([label, value]) => `
+          <div class="workspace-definition-field"><strong>${label}</strong><p>${escapeHtml(value)}</p></div>`).join("") || '<p class="workspace-definition-empty">草稿暂未提炼出可展示的字段；请编辑后确认。</p>'}
+        </div>`;
+    }
+
+    function openProjectDefinitionEditor() {
+      const definition = selectedProject?.definition || {};
+      document.getElementById("definitionSummary").value = definition.summary || "";
+      document.getElementById("definitionGoal").value = definition.goal || "";
+      document.getElementById("definitionScope").value = definition.scope || "";
+      document.getElementById("definitionNonGoals").value = definition.non_goals || "";
+      document.getElementById("definitionAcceptance").value = definition.acceptance_criteria || "";
+      document.getElementById("definitionConstraints").value = definition.constraints || "";
+      openModal("projectDefinitionModal");
+    }
+
+    async function saveProjectDefinition(event) {
+      event.preventDefault();
+      if (!selectedProject) return;
+      try {
+        await api(`/api/workspace/projects/${encodeURIComponent(selectedProject.project_id)}/definition`, {
+          method:"PUT", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({
+            summary:document.getElementById("definitionSummary").value.trim(),
+            goal:document.getElementById("definitionGoal").value.trim(),
+            scope:document.getElementById("definitionScope").value.trim(),
+            non_goals:document.getElementById("definitionNonGoals").value.trim(),
+            acceptance_criteria:document.getElementById("definitionAcceptance").value.trim(),
+            constraints:document.getElementById("definitionConstraints").value.trim(),
+            status:"confirmed",
+          }),
+        });
+        closeModal("projectDefinitionModal"); toast("项目定义已保存并确认");
+        await loadWorkspace(selectedProject.project_id);
+      } catch (error) { toast(error.message || "保存项目定义失败", "error"); }
+    }
+
+    async function confirmProjectDefinition() {
+      if (!selectedProject) return;
+      try {
+        await api(`/api/workspace/projects/${encodeURIComponent(selectedProject.project_id)}/definition/confirm`, {method:"POST"});
+        toast("项目定义已确认；后续扫描不会自动覆盖它");
+        await loadWorkspace(selectedProject.project_id);
+      } catch (error) { toast(error.message || "确认项目定义失败", "error"); }
+    }
+
+    async function ignoreProjectDefinition() {
+      if (!selectedProject) return;
+      try {
+        await api(`/api/workspace/projects/${encodeURIComponent(selectedProject.project_id)}/definition/ignore`, {method:"POST"});
+        toast("已忽略这份项目定义草稿");
+        await loadWorkspace(selectedProject.project_id);
+      } catch (error) { toast(error.message || "忽略项目定义失败", "error"); }
+    }
+
+    async function openDefinitionSources() {
+      const ids = new Set(selectedProject?.definition?.source_segment_ids || []);
+      try {
+        const segments = await Promise.all([...ids].map(id =>
+          api(`/api/workspace/segments/${encodeURIComponent(id)}`)
+        ));
+        renderSourceSegments("项目定义 · 来源讨论", segments);
+      } catch (error) { toast(error.message || "读取来源讨论失败", "error"); }
+    }
+
+    async function openUnassignedConversations() {
+      if (!selectedProject) return;
+      try {
+        const conversations = await api("/api/workspace/conversations/unassigned");
+        const list = document.getElementById("unassignedConversationList");
+        if (!conversations.length) {
+          list.innerHTML = '<p class="workspace-definition-empty">没有需要手动关联的会话。新同步且带有项目目录的 Codex 会话会自动归入当前项目。</p>';
+        } else {
+          list.innerHTML = conversations.map(conversation => {
+            const title = escapeHtml(conversation.title || "未命名会话");
+            const source = conversation.source === "codex" ? "Codex" : "Claude";
+            const id = escapeHtml(conversation.conversation_id).replace(/'/g, "&#39;");
+            return `<article class="workspace-unassigned-item"><div><strong>${title}</strong><small>${source} · ${formatDate(conversation.updated_at)}</small></div><button type="button" class="send-btn" onclick="assignConversationToProject('${id}')">关联</button></article>`;
+          }).join("");
+        }
+        openModal("unassignedConversationModal");
+      } catch (error) { toast(error.message || "读取未关联会话失败", "error"); }
+    }
+
+    async function assignConversationToProject(conversationId) {
+      if (!selectedProject) return;
+      try {
+        await api(`/api/workspace/conversations/${encodeURIComponent(conversationId)}/project`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({project_id:selectedProject.project_id}),
+        });
+        closeModal("unassignedConversationModal");
+        toast("会话已关联；现在可运行增量分析提炼项目定义");
+        await loadWorkspace(selectedProject.project_id);
+      } catch (error) { toast(error.message || "关联会话失败", "error"); }
     }
 
     function showEmptyWorkspace() {
@@ -385,7 +562,6 @@
     }
 
     function filteredWorkItems() {
-      if (currentFilter === "project_discussions") return [];
       if (currentFilter === "suggested") return workItems.filter(item => item.status === "suggested");
       if (currentFilter === "ignored") return workItems.filter(item => item.status === "ignored");
       if (currentFilter === "completed") return workItems.filter(item => item.status === "completed");
@@ -397,10 +573,6 @@
       const mergeToolbar = document.getElementById("mergeToolbar");
       mergeToolbar.hidden = currentFilter !== "suggested";
       document.getElementById("mergeSelectedCount").textContent = selectedMergeItems.size;
-      if (currentFilter === "project_discussions") {
-        renderProjectDiscussions();
-        return;
-      }
       const items = filteredWorkItems();
       if (!items.length) {
         const messages = {
@@ -408,7 +580,6 @@
           suggested: "没有待确认工作项；自动分析发现的新事项会显示在这里。",
           ignored: "没有已忽略工作项。",
           completed: "还没有已完成工作项。",
-          project_discussions: "暂时没有识别到项目级讨论。",
         };
         const suggestedCount = workItems.filter(item => item.status === "suggested").length;
         const actions = currentFilter === "formal"
@@ -445,24 +616,6 @@
           ${progress}
           <div class="workspace-item-meta"><span>创建：${formatDate(item.created_at)}</span>${item.completed_at ? `<span>完成：${formatDate(item.completed_at)}</span>` : ""}${item.source === "inferred" ? `<span>自动发现${item.confidence === null ? "" : ` · ${Math.round(item.confidence * 100)}%`}</span>` : "<span>手动创建</span>"}</div>
           ${actions ? `<div class="workspace-item-actions">${actions}</div>` : ""}
-        </article>`;
-      }).join("");
-    }
-
-    function renderProjectDiscussions() {
-      const list = document.getElementById("workItemList");
-      if (!projectDiscussions.length) {
-        list.innerHTML = '<div class="workspace-items-empty"><p>暂时没有识别到项目级讨论。</p></div>';
-        return;
-      }
-      list.innerHTML = projectDiscussions.map(segment => {
-        const conversation = segment.conversation || {};
-        const source = conversation.source === "codex" ? "Codex" : conversation.source === "claude" ? "Claude" : "Work Assistant";
-        return `<article class="workspace-item-card workspace-discussion-card">
-          <div class="workspace-item-card-heading"><div><span class="workspace-type-badge type-other">项目讨论</span><span class="workspace-source-badge source-${escapeHtml(conversation.source)}">${source}</span></div><span>${formatDate(conversation.updated_at)}</span></div>
-          <h3>${escapeHtml(segment.title || conversation.title || "项目级讨论")}</h3>
-          <p>${escapeHtml(segment.summary || "该片段讨论项目整体状态、架构或规划，不自动建立具体工作项。")}</p>
-          <div class="workspace-item-actions"><button onclick="openProjectDiscussion('${segment.segment_id}')">查看对话片段</button></div>
         </article>`;
       }).join("");
     }
@@ -709,6 +862,7 @@
       queued: "等待后台线程", local_screening: "本地规则初筛",
       syncing_local_conversations: "正在同步本机 Codex / Claude 会话",
       matching_projects: "正在匹配会话所属项目",
+      project_definition: "正在提炼项目定义草稿",
       segmenting_conversations: "正在生成会话分析片段",
       amd_classification: "AMD 语义分析", cancellation_requested: "正在停止当前批次",
       cancelled: "已停止", finished: "分析结束", failed: "分析失败", interrupted: "服务重启时中断"
@@ -830,6 +984,23 @@
 
     function openModal(id) { document.getElementById(id).hidden = false; }
     function closeModal(id) { document.getElementById(id).hidden = true; }
+    function toggleProjectDrawer() {
+      const drawer = document.getElementById("projectDrawer");
+      const toggle = document.getElementById("projectDrawerToggle");
+      const backdrop = document.getElementById("projectDrawerBackdrop");
+      const willOpen = !drawer.classList.contains("open");
+      drawer.classList.toggle("open", willOpen);
+      toggle.setAttribute("aria-expanded", String(willOpen));
+      backdrop.hidden = !willOpen;
+    }
+    function closeProjectDrawer() {
+      const drawer = document.getElementById("projectDrawer");
+      const toggle = document.getElementById("projectDrawerToggle");
+      const backdrop = document.getElementById("projectDrawerBackdrop");
+      drawer.classList.remove("open");
+      toggle.setAttribute("aria-expanded", "false");
+      backdrop.hidden = true;
+    }
     function openWorkItemModal() {
       if (!selectedProject) return toast("请先选择项目", "error");
       document.getElementById("workItemProjectName").textContent = selectedProject.name;
@@ -946,7 +1117,7 @@
     document.addEventListener("click", event => {
       if (!event.target.closest(".workspace-project-open-menu")) closeProjectOpenMenu();
     });
-    document.addEventListener("keydown", event => { if (event.key === "Escape") closeProjectOpenMenu(); });
+    document.addEventListener("keydown", event => { if (event.key === "Escape") { closeProjectOpenMenu(); closeProjectDrawer(); } });
     document.querySelectorAll(".workspace-modal").forEach(modal => modal.addEventListener("click", event => { if (event.target === modal) modal.hidden = true; }));
     refreshTopbarAMDStatus();
     loadWorkspace();

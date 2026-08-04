@@ -7,15 +7,13 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <nav class="navbar">
-    <span class="nav-brand">⚙ Work Assistant Agent</span>
-    <div class="nav-links">
-      <a href="/" class="nav-link">对话</a>
-      <a href="/workspace" class="nav-link">项目与工作项</a>
-      <a href="/tasks" class="nav-link active">旧任务</a>
-      <a href="/settings" class="nav-link">设置</a>
+  <nav class="navbar app-status-header" aria-label="系统状态">
+    <span class="app-header-title">work_assistant</span>
+    <div class="nav-actions">
+      <a id="topbarAMDStatus" class="topbar-amd-status" href="/settings#amdSettings" title="查看或修改大模型连接配置"><i class="topbar-status-dot"></i><span>大模型检测中</span></a>
     </div>
   </nav>
+  <nav class="app-section-tabs" aria-label="页面导航"><a href="/" class="nav-link">工作台</a><a href="/conversations" class="nav-link">会话</a><a href="/tasks" class="nav-link active">任务</a><a href="/settings" class="nav-link">设置</a></nav>
 
   <div class="tasks-layout">
     <div class="tasks-header">

@@ -105,24 +105,19 @@ class ConversationTests(unittest.TestCase):
         self.assertNotIn("syncExternalSessions()", bootstrap_body)
         self.assertIn("onclick=\"syncExternalSessions()\"", template)
 
-    def test_conversation_page_focuses_on_collapsible_time_sorted_session_history(self):
+    def test_conversation_page_uses_issue_list_and_readonly_history_comments(self):
         template = Path("templates/index.html").read_text(encoding="utf-8")
-        conversation_tree = template.index('id="conversationList"')
-
-        self.assertGreater(conversation_tree, 0)
-        self.assertIn("会话资料", template)
-        self.assertIn("新建 AMD 辅助对话", template)
-        self.assertIn('id="topbarSyncButton"', template)
+        self.assertIn('id="conversationList" class="conversation-issue-list"', template)
+        self.assertIn("新建 work_assistant 会话", template)
+        self.assertIn('id="syncSessionsBtn"', template)
         self.assertIn("/api/conversations/sync-all", template)
-        self.assertIn("项目与工作项请到工作台管理", template)
-        self.assertNotIn("startQuickAction(", template)
-        self.assertIn("function toggleConversationGroup(", template)
-        self.assertIn('className = "conversation-group-children"', template)
-        self.assertIn("items.sort((a, b) => conversationTimestamp(b) - conversationTimestamp(a))", template)
-        self.assertIn('sourceLabel = item.source === "work_assistant"', template)
+        self.assertIn("让 work_assistant 分析此会话", template)
+        self.assertIn("只读历史", template)
+        self.assertIn("conversationProjectFilter", template)
+        self.assertIn("CONVERSATION_FILTER_STATE", template)
+        self.assertIn('requestKind === "summary"', template)
+        self.assertIn("/summary", template)
         self.assertIn("formatConversationTime(item.updated_at)", template)
-        self.assertIn("向本机", template)
-        self.assertIn("/api/external-conversations/", template)
 
     def test_project_detection_separates_project_and_casual_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -201,6 +196,8 @@ class ConversationTests(unittest.TestCase):
             imported_again = store.import_external(codex_root, claude_root)
             conversations = store.list()
             codex_conversation = store.get("codex:codex-session")
+            comment = store.add_comment("codex:codex-session", "总结这段对话", "项目已经准备完成。")
+            comments = store.comments("codex:codex-session")
             store.delete("codex:codex-session")
             after_delete_sync = store.import_external(codex_root, claude_root)
 
@@ -212,6 +209,8 @@ class ConversationTests(unittest.TestCase):
         self.assertGreaterEqual(imported_again["skipped"], 2)
         self.assertEqual({item["source"] for item in conversations}, {"work_assistant", "codex", "claude"})
         self.assertTrue(codex_conversation["readonly"])
+        self.assertEqual(comment["prompt"], "总结这段对话")
+        self.assertEqual([item["content"] for item in comments], ["项目已经准备完成。"])
         self.assertEqual(after_delete_sync["codex"], 0)
 
     def test_conversation_api_create_list_messages_rename_delete(self):
