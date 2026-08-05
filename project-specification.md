@@ -6,7 +6,7 @@
 
 ## 1. Executive Summary
 
-Work Assistant is a local-first web application that helps individual developers recover development context after interruptions. It unifies local project evidence, task plans, and local AI coding conversation history into a single workspace, then uses a language model to turn that evidence into actionable plans, progress reports, risks, and next steps.
+Work Assistant is a local-first web application that helps individual developers recover development context after interruptions. It unifies local project evidence, task plans, and local AI coding conversation history into a single workspace, then uses a language model to turn bounded, relevant evidence into actionable plans, progress reports, risks, and next steps.
 
 The project addresses a recurring problem in AI-assisted development: work context is fragmented across Git history, modified files, terminal sessions, IDE state, and long Codex or Claude conversations. Reconstructing that context manually is slow and error-prone. Work Assistant keeps the data collection and persistence layer on the developer's own machine, while using an OpenAI-compatible model endpoint only for reasoning and summarization.
 
@@ -62,9 +62,12 @@ flowchart LR
     LLM -. final deployment target .-> VLLM[AMD Radeon Cloud vLLM endpoint]
 
     API --> Workspace[Workspace Services]
-    Workspace --> Sync[Codex / Claude History Sync]
-    Workspace --> Segment[Semantic Segmentation]
-    Workspace --> Items[Work-item and Context Package Discovery]
+    Workspace --> Sync[Incremental Codex / Claude History Sync]
+    Sync --> Segment[Stable Semantic Segmentation]
+    Segment --> Retrieve[Local Retrieval Chunks]
+    Retrieve --> Summary[Hierarchical Summary Builder]
+    Segment --> Items[Top-K Work-item Candidate Retrieval]
+    Items --> Context[Context Package Discovery]
 
     Plan --> DB[(Local SQLite)]
     API --> DB
@@ -81,7 +84,8 @@ flowchart LR
 | LLM integration | LangChain OpenAI client | Calls an OpenAI-compatible model endpoint for reasoning tasks |
 | Local evidence collector | Python, Git, filesystem, process inspection | Builds a project snapshot from selected local development signals |
 | Task service | Python + SQLite | Persists tasks, steps, sub-tasks, and progress state |
-| Workspace service | Python + SQLite | Stores projects, imported conversations, semantic segments, work items, and context packages |
+| Workspace service | Python + SQLite | Stores projects, imported conversations, stable semantic segments, retrieval chunks, work items, and context packages |
+| Incremental analysis and retrieval | Local lexical retrieval + bounded prompts | Preserves stable evidence, processes only changed conversation tails, retrieves relevant history, and bounds model context |
 | Browser UI | Jinja2 templates, HTML, CSS, JavaScript | Provides setup, chat, conversations, and workspace interfaces |
 
 ### 3.2 Agent Decision Flow
@@ -115,7 +119,11 @@ The output is intentionally presented as an AI-assisted assessment, not as an ir
 
 ### 4.3 Local AI Conversation Workspace
 
-The workspace can incrementally import local Codex and Claude conversation data without modifying the raw source histories. It supports project matching, semantic segmentation of long conversations, discovery of candidate work items, and versioned context packages for resuming work.
+The workspace incrementally imports local Codex and Claude conversation data without modifying raw source histories. A longest-common-prefix reconciliation keeps unchanged message prefixes and stable segment identities intact. When a conversation grows, only the final affected segment and newly appended segments are re-segmented and eligible for reclassification; previously classified, unchanged evidence and context-package sources remain reusable.
+
+For long histories, the application creates bounded overlapping retrieval chunks and selects relevant local evidence before a focused summary request. If a complete summary is required but exceeds the prompt budget, a token-budgeted hierarchical map-reduce summary path is used. This prevents an entire historical transcript from being sent in every model request.
+
+For work-item discovery, a local retriever selects a Top-K, character-budgeted candidate set from project work items. The model can match only against these relevant candidates or propose a new item; local similarity checks reduce duplicate work-item creation.
 
 ### 4.4 Privacy-Aware Data Handling
 
@@ -191,13 +199,13 @@ Open `http://127.0.0.1:8000`, complete the setup wizard, and provide either the 
 
 ### 7.2 Automated Validation
 
-The current source baseline passes 124 automated tests:
+The current source baseline passes 146 automated tests:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-The test suite covers agent flows, task persistence, settings and secret handling, streaming cancellation, external conversation synchronization, project matching, semantic segmentation, workspace operations, and UI/API behavior.
+The test suite covers agent flows, task persistence, settings and secret handling, streaming cancellation, external conversation synchronization, project matching, stable semantic segmentation, incremental analysis, bounded retrieval, hierarchical summaries, workspace operations, and UI/API behavior.
 
 ## 8. Demonstration Plan
 
@@ -206,7 +214,7 @@ The final 3–5 minute demonstration will show:
 1. Local application startup and setup status.
 2. A developer creating or assessing a project through the browser UI.
 3. Local evidence collection and the resulting plan/progress report.
-4. Workspace synchronization and context recovery from a local AI conversation.
+4. Workspace synchronization, incremental analysis, and context recovery from a local AI conversation.
 5. The same application workflow calling the Radeon Cloud/vLLM endpoint.
 6. Radeon GPU runtime evidence and the measured responsiveness of the workflow.
 

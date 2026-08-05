@@ -20,7 +20,9 @@ When development is interrupted, the relevant context is usually scattered acros
 - **Local project snapshots** — collects Git metadata, changed files, commit summaries, project structure, selected IDE/work-session signals, terminal history, and development process information.
 - **Evidence-based progress reports** — compares a saved task plan with the latest local snapshot to produce completion estimates, evidence, risks, and next actions.
 - **Persistent multi-turn sessions** — uses LangGraph checkpoints and SQLite to preserve web chat state across requests.
-- **Workspace context recovery** — incrementally imports local Codex and Claude histories, associates them with projects, semantically segments long conversations, and derives reusable work items and context packages.
+- **Incremental workspace analysis** — synchronizes local Codex and Claude histories without reprocessing stable conversation evidence; only changed conversation tails are re-segmented and reclassified.
+- **Bounded retrieval for long histories** — chunks imported conversations, retrieves relevant historical evidence locally, and uses a hierarchical summary path when a full history is too large for one model request.
+- **Work-item candidate retrieval** — selects a bounded Top-K set of locally relevant work items before asking the model to classify a conversation segment, reducing irrelevant context and repeated model calls.
 - **Safe continuation controls** — supports cancellation of streamed requests and keeps raw external histories read-only while storing Work Assistant analysis separately.
 
 ## Architecture
@@ -36,9 +38,10 @@ FastAPI server (server.py)
     │       ├── local snapshot collection (snapshot_collector.py)
     │       └── progress analysis (progress_analyzer.py)
     ├── Workspace services
-    │       ├── Codex / Claude history synchronization
-    │       ├── project matching and semantic segmentation
-    │       └── work-item and context-package management
+    │       ├── incremental Codex / Claude history synchronization
+    │       ├── project matching and stable semantic segmentation
+    │       ├── local retrieval chunks and hierarchical summaries
+    │       └── bounded work-item discovery and context-package management
     └── SQLite persistence
 
 LLM endpoint (OpenAI-compatible)
@@ -111,8 +114,12 @@ task_manager.py                 Task plans and persistence
 snapshot_collector.py           Local project evidence collection
 progress_analyzer.py            Evidence-to-progress analysis
 settings.py                     Endpoint, key, and local configuration management
-workspace_store.py              Workspace SQLite data layer
-external_conversation_sync.py   Codex/Claude history import
+workspace_store.py              Workspace SQLite data layer and incremental evidence lifecycle
+external_conversation_sync.py   Codex/Claude history import and change detection
+conversation_retriever.py       Local lexical retrieval over imported conversation chunks
+retrieval_chunker.py            Bounded, overlapping conversation-chunk construction
+summary_hierarchy.py            Token-budgeted hierarchical summary construction
+work_item_retriever.py          Top-K local candidate selection for work-item discovery
 templates/                      HTML pages
 static/                         CSS and browser-side JavaScript
 tests/                          Unit and integration-style tests
