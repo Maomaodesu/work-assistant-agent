@@ -335,6 +335,26 @@ def _load_prompt(filename: str) -> str:
     return (Path(__file__).parent / filename).read_text(encoding="utf-8")
 
 
+def _parse_task_json(raw: str) -> dict:
+    """从模型输出中提取任务 JSON，兼容代码块和前后说明文字。"""
+    value = str(raw or "").strip()
+    if not value:
+        raise ValueError("AMD 模型没有返回任务计划内容，请重试")
+
+    start = value.find("{")
+    if start < 0:
+        raise ValueError("AMD 模型返回的任务计划不是 JSON 对象，请重试")
+
+    try:
+        parsed, _ = json.JSONDecoder().raw_decode(value[start:])
+    except json.JSONDecodeError as exc:
+        raise ValueError("AMD 模型返回的任务计划 JSON 格式不正确，请重试") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("AMD 模型返回的任务计划格式不正确，请重试")
+    return parsed
+
+
 def create_task_via_llm(
     user_description: str,
     project_paths: list,
@@ -370,16 +390,10 @@ def create_task_via_llm(
         ],
         temperature=0.1,
         max_tokens=2048,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         timeout=settings.request_timeout_seconds,
     )
-    raw = raw.strip()
-    # 去掉可能的 markdown 代码块
-    if raw.startswith("```"):
-        raw = "\n".join(raw.splitlines()[1:])
-    if raw.endswith("```"):
-        raw = "\n".join(raw.splitlines()[:-1])
-
-    parsed = json.loads(raw)
+    parsed = _parse_task_json(raw)
 
     now = datetime.now().isoformat()
     task_id = f"TASK-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -476,15 +490,10 @@ def init_existing_project_via_llm(
         ],
         temperature=0.1,
         max_tokens=2048,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         timeout=settings.request_timeout_seconds,
     )
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = "\n".join(raw.splitlines()[1:])
-    if raw.endswith("```"):
-        raw = "\n".join(raw.splitlines()[:-1])
-
-    parsed = json.loads(raw)
+    parsed = _parse_task_json(raw)
 
     now = datetime.now().isoformat()
     task_id = f"TASK-{datetime.now().strftime('%Y%m%d-%H%M%S')}"

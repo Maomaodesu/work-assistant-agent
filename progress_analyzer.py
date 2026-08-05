@@ -119,6 +119,7 @@ def analyze_progress(
         ],
         temperature=0.1,
         max_tokens=2048,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         timeout=settings.request_timeout_seconds,
     )
     raw = raw.strip()
