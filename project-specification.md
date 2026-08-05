@@ -2,7 +2,7 @@
 
 **Track:** Track 2 — Development & Local Deployment of Private AI Agents
 **Project:** Work Assistant
-**Status:** Source code and local Token Factory development baseline are complete. Radeon Cloud/vLLM deployment measurements will be added before the final submission.
+**Status:** Source code, English documentation, a dedicated Radeon Cloud vLLM deployment, and a reproducible endpoint measurement are complete. Demo video, supplementary material, and the official pull request remain pending.
 
 ## 1. Executive Summary
 
@@ -144,47 +144,64 @@ The current working baseline uses the official AMD Radeon Token Factory OpenAI-c
 
 This baseline is used for functional development and regression testing. It preserves the agent workflow, local persistence, and local project-inspection capabilities.
 
-### 5.2 Radeon Cloud/vLLM Final Deployment Plan
+### 5.2 Radeon Cloud/vLLM Deployment
 
 The LLM integration is centralized through configuration values (`AMD_BASE_URL`, `AMD_MODEL`, and `AMD_API_KEY`). Therefore, an AMD Radeon Cloud instance exposing an OpenAI-compatible vLLM endpoint can replace the development endpoint without rewriting the task, snapshot, workspace, or UI layers.
 
-Final deployment steps:
+The dedicated deployment used for this submission is configured as follows. The endpoint API key is stored locally and intentionally omitted from this document and the repository.
 
-1. Create a Radeon Cloud instance with an AMD Radeon GPU and deploy the selected model with vLLM.
-2. Obtain the instance's OpenAI-compatible `/v1` endpoint and the exposed model identifier.
-3. Configure the endpoint in the Work Assistant setup page or environment configuration.
-4. Verify a simple chat request, then validate the task-planning, project-assessment, progress-analysis, and SSE streaming workflows.
-5. Record the GPU environment, model identifier, deployment command/configuration, and observed runtime evidence for the final video and this document.
+| Setting | Measured deployment value |
+|---|---|
+| Cloud GPU | AMD Radeon Pro W7900 in Radeon Cloud |
+| Container image | ROCm vLLM-dev (Navi): ROCm 7.2.1, Ubuntu 22.04, Python 3.10, PyTorch 2.9, vLLM 0.16.0 |
+| Model source | HuggingFace mirror |
+| Served model | `Qwen/Qwen3-14B` |
+| Serve command | `vllm serve Qwen/Qwen3-14B --host 0.0.0.0 --port 8000` |
+| Service interface | Dedicated OpenAI-compatible Radeon Cloud Model API on port 8000, exposed with a `/v1` base URL |
+| Application integration | Work Assistant setup page supplies `AMD_BASE_URL`, `AMD_MODEL`, and a locally stored `AMD_API_KEY` |
+| Persistence choice | Local SSD plus persistent PVC |
 
-## 6. AMD Radeon GPU Inference Optimization Plan and Measurements
+The local Work Assistant successfully completed a basic chat request after switching its setup configuration to this dedicated endpoint. The remaining demonstration validates a task-planning or progress-analysis workflow through the same endpoint.
 
-The project has not yet claimed a completed dedicated Radeon Cloud/vLLM deployment or benchmark. This section defines the reproducible measurement plan that will be completed before final submission.
+## 6. AMD Radeon GPU Inference Configuration and Measurements
 
-### 6.1 Planned Optimizations
+### 6.1 Deployment and Inference Choices
 
 - Use vLLM as the dedicated model-serving layer on an AMD Radeon Cloud GPU instance.
 - Keep the application on the OpenAI-compatible API contract so model serving can be changed without business-workflow rewrites.
 - Use server-sent events to stream generated output to the browser instead of waiting for an entire response.
 - Configure request timeouts and cancellation so a user can stop an unnecessary long-running generation.
-- Compare an appropriate smaller or quantized model configuration with the development baseline when GPU memory, latency, or concurrency requires it.
+- Select a 14B Qwen model that fits within the W7900's 48 GB class of memory while retaining stronger agent reasoning than a smaller smoke-test model.
 
-### 6.2 Metrics to Record
+This submission reports one deployed configuration and does not claim a before/after optimization gain that was not measured.
 
-The final report will record real values, commands, and screenshots for:
+### 6.2 Measured Endpoint Result
+
+The committed result file `bench-results/vllm-benchmark-20260805-121316.json` was generated on 2026-08-05 with one warm-up request followed by three measured, non-streaming requests. Each request used a fixed English prompt, temperature `0`, a 128-token completion cap, and the deployed `Qwen/Qwen3-14B` endpoint.
+
+| Metric | Result |
+|---|---:|
+| Measured requests | 3, after 1 warm-up request |
+| Prompt tokens per request | 27 |
+| Completion tokens per request | 128 |
+| Average end-to-end latency | 8,884.20 ms |
+| Effective completion rate | 14.41 tokens/s |
+| Per-run latency range | 8,878.24–8,892.05 ms |
+| Per-run effective completion rate | 14.39–14.42 tokens/s |
+
+The reported completion rate is completion tokens divided by the full non-streaming HTTP request duration, so it includes connection and request overhead. It is not a separate server-side streaming-token benchmark. Each measured request stopped at the configured 128-token cap (`finish_reason: length`).
+
+### 6.3 Additional Metrics for the Demo
+
+The demo will additionally show the following real evidence:
 
 | Metric | Measurement method |
 |---|---|
-| GPU and ROCm environment | Radeon Cloud instance information and runtime command output |
-| Model and serving configuration | vLLM model name, quantization choice if used, context length, and launch parameters |
-| Time to first token | Timestamped request/first streamed token observation |
-| Generation speed | Tokens per second for representative task and progress prompts |
-| End-to-end latency | Browser request to completed report |
-| Concurrency behavior | Sequential and concurrent requests where feasible |
-| Functional stability | Successful end-to-end task, progress, and workspace workflows |
+| GPU and ROCm environment | Radeon Cloud deployment status and redacted configuration screenshot |
+| Model and serving configuration | Model name, vLLM image, serve command, and API path |
+| Functional stability | Browser chat plus task-planning or progress-analysis workflows through the same endpoint |
 
-No performance numbers are included until they are measured on the deployed Radeon GPU environment.
-
-### 6.3 Reproducible Measurement Procedure
+### 6.4 Reproducible Measurement Procedure
 
 The repository includes `scripts/benchmark_vllm.ps1`. It prompts locally for an API key without writing it to disk, performs one warm-up request and three fixed-prompt non-streaming requests, and writes a non-secret JSON result under `bench-results/`. The result records endpoint host, model, request parameters, per-run latency, token counts, and completion tokens per second.
 
@@ -194,7 +211,7 @@ The repository includes `scripts/benchmark_vllm.ps1`. It prompts locally for an 
   -Model "Qwen/Qwen3-14B"
 ```
 
-Before final submission, this section will be updated with the generated JSON values and redacted deployment evidence.
+The generated JSON values above are committed without credentials. The final video will add redacted deployment evidence and an end-to-end application workflow.
 
 ## 7. Reproducibility and Validation
 
@@ -236,9 +253,9 @@ The final 3–5 minute demonstration will show:
 |---|---|
 | Complete source code | Complete |
 | English README | Complete |
-| English Project Specification | Draft complete; GPU measurements pending |
-| Radeon Cloud/vLLM deployment | Pending |
-| AMD GPU optimization measurements | Pending |
+| English Project Specification | Complete; measured deployment data included |
+| Radeon Cloud/vLLM deployment | Complete; local application basic chat verified |
+| AMD GPU optimization measurements | One reproducible endpoint configuration measured; no unmeasured before/after claim |
 | 3–5 minute demo video | Pending |
 | Poster or presentation | Pending |
 | Official Pull Request | Pending |

@@ -1,0 +1,41 @@
+﻿{
+    "measured_at_utc":  "2026-08-05T04:13:16.4631541Z",
+    "endpoint_host":  "radeon-global.anruicloud.com",
+    "model":  "Qwen/Qwen3-14B",
+    "request":  {
+                    "runs":  3,
+                    "max_tokens":  128,
+                    "stream":  false,
+                    "temperature":  0
+                },
+    "measurements":  [
+                         {
+                             "elapsed_ms":  8882.31,
+                             "prompt_tokens":  27,
+                             "completion_tokens":  128,
+                             "total_tokens":  155,
+                             "completion_tokens_per_second":  14.41,
+                             "finish_reason":  "length"
+                         },
+                         {
+                             "elapsed_ms":  8878.24,
+                             "prompt_tokens":  27,
+                             "completion_tokens":  128,
+                             "total_tokens":  155,
+                             "completion_tokens_per_second":  14.42,
+                             "finish_reason":  "length"
+                         },
+                         {
+                             "elapsed_ms":  8892.05,
+                             "prompt_tokens":  27,
+                             "completion_tokens":  128,
+                             "total_tokens":  155,
+                             "completion_tokens_per_second":  14.39,
+                             "finish_reason":  "length"
+                         }
+                     ],
+    "averages":  {
+                     "elapsed_ms":  8884.2,
+                     "completion_tokens_per_second":  14.41
+                 }
+}

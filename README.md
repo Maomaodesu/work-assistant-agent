@@ -147,7 +147,7 @@ AMD_MODEL=the-model-exposed-by-your-vllm-service
 AMD_API_KEY=your_endpoint_key_if_required
 ```
 
-The final hackathon deliverables will document the deployed Radeon Cloud/vLLM configuration, measured runtime behavior, and reproducible demonstration steps. This README does not claim that a dedicated GPU deployment or benchmark has already been completed.
+A dedicated Radeon Cloud vLLM Model API has been deployed for the current submission using `Qwen/Qwen3-14B` on an AMD Radeon Pro W7900. The local Work Assistant is configured through its setup page with the endpoint's OpenAI-compatible `/v1` base URL, model name, and locally stored API key; no application code change is required. The non-secret benchmark result in `bench-results/` records a three-run measurement of this endpoint.
 
 ## Hackathon delivery status
 
@@ -155,8 +155,8 @@ The final hackathon deliverables will document the deployed Radeon Cloud/vLLM co
 |---|---|
 | Complete source code | Available in this repository |
 | English README | Available (this document) |
-| English Project Specification | Planned |
-| Radeon Cloud / vLLM deployment evidence | Planned |
+| English Project Specification | Available; measured deployment data included |
+| Radeon Cloud / vLLM deployment evidence | Available; redacted screenshots and demo video pending |
 | 3–5 minute demo video | Planned |
 | Optional poster or presentation | Planned |
 
