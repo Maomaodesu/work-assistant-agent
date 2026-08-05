@@ -91,6 +91,8 @@ class ProjectInfo:
     branch: str
     commits: list[GitCommitInfo]
     root_files: list[str]      # 根目录中的关键源码与项目配置文件
+    test_file_count: int       # tests 目录中实际存在的测试源码数量
+    benchmark_files: list[str] # 已保存的性能测量结果
     modules: list[ProjectModule]
     uncommitted_tracked: list[GitChangeInfo]
     diff_unstaged: str
@@ -314,6 +316,16 @@ def collect_project_info(project_path: str) -> ProjectInfo:
             }
         )
     )
+    tests_root = root / "tests"
+    test_file_count = sum(
+        1 for fp in tests_root.rglob("*")
+        if fp.is_file() and fp.suffix.lower() == ".py"
+    ) if tests_root.is_dir() else 0
+    benchmark_root = root / "bench-results"
+    benchmark_files = sorted(
+        fp.relative_to(root).as_posix()
+        for fp in benchmark_root.glob("*.json")
+    ) if benchmark_root.is_dir() else []
     module_map: dict[str, list[ModuleFile]] = {}
 
     for fp in sorted(root.rglob("*")):
@@ -360,6 +372,8 @@ def collect_project_info(project_path: str) -> ProjectInfo:
         branch=branch,
         commits=commits,
         root_files=root_files,
+        test_file_count=test_file_count,
+        benchmark_files=benchmark_files,
         modules=modules,
         uncommitted_tracked=uncommitted,
         diff_unstaged=diff_unstaged,

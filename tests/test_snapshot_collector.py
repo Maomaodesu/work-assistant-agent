@@ -12,6 +12,12 @@ class SnapshotCollectorTests(unittest.TestCase):
             (root / "server.py").write_text("app = object()", encoding="utf-8")
             (root / "requirements.txt").write_text("fastapi", encoding="utf-8")
             (root / "README.md").write_text("# Demo", encoding="utf-8")
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "test_server.py").write_text("def test_ok(): pass", encoding="utf-8")
+            benchmarks = root / "bench-results"
+            benchmarks.mkdir()
+            (benchmarks / "vllm.json").write_text("{}", encoding="utf-8")
             dependency = root / ".venv" / "Lib" / "site-packages"
             dependency.mkdir(parents=True)
             (dependency / "third_party.py").write_text("x = 1", encoding="utf-8")
@@ -20,6 +26,8 @@ class SnapshotCollectorTests(unittest.TestCase):
 
         self.assertEqual(project.project_type, "python")
         self.assertEqual(project.root_files, ["README.md", "requirements.txt", "server.py"])
+        self.assertEqual(project.test_file_count, 1)
+        self.assertEqual(project.benchmark_files, ["bench-results/vllm.json"])
         scanned_paths = [file.path for module in project.modules for file in module.files]
         self.assertNotIn(".venv/Lib/site-packages/third_party.py", scanned_paths)
 

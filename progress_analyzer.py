@@ -77,6 +77,8 @@ def analyze_progress(
                     else None
                 ),
                 "root_files": p.get("root_files", []),
+                "test_file_count": p.get("test_file_count", 0),
+                "benchmark_files": p.get("benchmark_files", []),
                 "modules": [
                     {
                         "name": m["module_name"],

@@ -20,6 +20,9 @@
 - `root_files` 是项目根目录的实际文件清单。只有其中明确缺少某文件时，才可以说 README、requirements 或其他配置文件不存在。
 - Python 项目可以采用扁平结构，例如根目录的 `server.py`、`agent_graph.py`、`*_manager.py`；没有 `api/`、`service/`、`model/` 子目录本身不是风险，也不能据此判断代码结构为空。
 - `layers_missing` 只是传统分层项目的辅助信号。对于扁平结构项目，优先引用 `root_files`、模块名、Git 提交和 diff 作为证据。
+- `requirements.txt` 或 `README.md` 出现在 `root_files` 中，即为其存在的确定证据；不要因为最新一条 Git 提交没有提到它就说文件缺失、不完整或没有提交记录。
+- `test_file_count` 大于 0 即为测试框架和测试源码存在的确定证据；`benchmark_files` 非空即为已有性能测量结果的确定证据。
+- 快照无法判断依赖是否已在当前机器安装。除非执行命令报错，否则不得把“依赖尚未安装”列为风险；可以建议用户在实际运行前验证安装状态。
 
 ## 输出要求
 
