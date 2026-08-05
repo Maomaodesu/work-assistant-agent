@@ -459,6 +459,7 @@ def init_existing_project_via_llm(
                     if settings.send_commit_info and p["commits"]
                     else None
                 ),
+                "root_files": p.get("root_files", []),
                 "recent_modules": [
                     {"module": m["module_name"], "layers": m["layers_present"], "status": m["git_status"]}
                     for m in p["modules"][:10]

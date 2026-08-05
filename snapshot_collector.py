@@ -90,6 +90,7 @@ class ProjectInfo:
     remote_url: str
     branch: str
     commits: list[GitCommitInfo]
+    root_files: list[str]      # 根目录中的关键源码与项目配置文件
     modules: list[ProjectModule]
     uncommitted_tracked: list[GitChangeInfo]
     diff_unstaged: str
@@ -205,6 +206,7 @@ _PYTHON_MVC_LAYERS = ["api", "service", "model", "schema"]
 _SKIP_DIRS = {
     ".git", "target", "build", "dist", "node_modules",
     "__pycache__", ".idea", ".vscode", ".gradle", ".agent",
+    ".venv", "venv", ".tox", ".mypy_cache",
 }
 
 _SOURCE_SUFFIXES = {
@@ -302,6 +304,16 @@ def collect_project_info(project_path: str) -> ProjectInfo:
 
     # 文件 → 模块聚合
     tracked_set = set(_run(["git", "ls-files"], project_path).splitlines())
+    root_files = sorted(
+        fp.name for fp in root.iterdir()
+        if fp.is_file() and (
+            fp.suffix.lower() in {".py", ".js", ".ts", ".java", ".go", ".rs"}
+            or fp.name.lower() in {
+                "readme.md", "requirements.txt", "pyproject.toml", "package.json",
+                "pom.xml", "dockerfile", "compose.yaml", "docker-compose.yml",
+            }
+        )
+    )
     module_map: dict[str, list[ModuleFile]] = {}
 
     for fp in sorted(root.rglob("*")):
@@ -347,6 +359,7 @@ def collect_project_info(project_path: str) -> ProjectInfo:
         remote_url=remote_url,
         branch=branch,
         commits=commits,
+        root_files=root_files,
         modules=modules,
         uncommitted_tracked=uncommitted,
         diff_unstaged=diff_unstaged,

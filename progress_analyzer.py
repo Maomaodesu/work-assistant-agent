@@ -76,6 +76,7 @@ def analyze_progress(
                     if settings.send_commit_info and p["commits"]
                     else None
                 ),
+                "root_files": p.get("root_files", []),
                 "modules": [
                     {
                         "name": m["module_name"],

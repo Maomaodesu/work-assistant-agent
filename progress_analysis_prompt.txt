@@ -15,6 +15,12 @@
 5. **last_modified 时间**：最近修改的模块对应的步骤最可能是 in_progress
 6. **uncommitted_count**：有大量未提交文件 → 当前步骤进行中但未完成
 
+## 证据约束
+
+- `root_files` 是项目根目录的实际文件清单。只有其中明确缺少某文件时，才可以说 README、requirements 或其他配置文件不存在。
+- Python 项目可以采用扁平结构，例如根目录的 `server.py`、`agent_graph.py`、`*_manager.py`；没有 `api/`、`service/`、`model/` 子目录本身不是风险，也不能据此判断代码结构为空。
+- `layers_missing` 只是传统分层项目的辅助信号。对于扁平结构项目，优先引用 `root_files`、模块名、Git 提交和 diff 作为证据。
+
 ## 输出要求
 
 **必须输出纯 JSON，不要输出任何其他文字，不要加 markdown 代码块。**
