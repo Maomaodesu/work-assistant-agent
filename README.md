@@ -99,6 +99,18 @@ For a headless configuration, set `WORK_ASSISTANT_SETUP_COMPLETED=true` after pr
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
+## Measuring a dedicated Radeon Cloud vLLM endpoint
+
+After launching a dedicated Radeon Cloud Model API, run the repeatable benchmark below from PowerShell. The script prompts for the API key without saving it, sends one warm-up request and three measured non-streaming requests, then writes a non-secret JSON result under `bench-results/`.
+
+```powershell
+.\scripts\benchmark_vllm.ps1 `
+  -BaseUrl "https://your-radeon-cloud-endpoint/v1" `
+  -Model "Qwen/Qwen3-14B"
+```
+
+Record the generated JSON together with a redacted platform screenshot for the final Project Specification and demo. Do not commit an API key.
+
 ## Data and privacy
 
 Work Assistant runs locally and stores its task, conversation, workspace, and checkpoint state in SQLite under `data/`. Snapshot files are stored under `snapshots/`.

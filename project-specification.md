@@ -184,6 +184,18 @@ The final report will record real values, commands, and screenshots for:
 
 No performance numbers are included until they are measured on the deployed Radeon GPU environment.
 
+### 6.3 Reproducible Measurement Procedure
+
+The repository includes `scripts/benchmark_vllm.ps1`. It prompts locally for an API key without writing it to disk, performs one warm-up request and three fixed-prompt non-streaming requests, and writes a non-secret JSON result under `bench-results/`. The result records endpoint host, model, request parameters, per-run latency, token counts, and completion tokens per second.
+
+```powershell
+.\scripts\benchmark_vllm.ps1 `
+  -BaseUrl "https://your-radeon-cloud-endpoint/v1" `
+  -Model "Qwen/Qwen3-14B"
+```
+
+Before final submission, this section will be updated with the generated JSON values and redacted deployment evidence.
+
 ## 7. Reproducibility and Validation
 
 ### 7.1 Local Setup
