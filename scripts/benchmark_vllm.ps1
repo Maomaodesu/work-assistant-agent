@@ -56,7 +56,7 @@ function Invoke-BenchmarkRequest {
         $null
     }
 
-    return [ordered]@{
+    return [PSCustomObject]@{
         elapsed_ms = $elapsedMs
         prompt_tokens = if ($null -eq $response.usage.prompt_tokens) { 0 } else { [int]$response.usage.prompt_tokens }
         completion_tokens = $completionTokens
