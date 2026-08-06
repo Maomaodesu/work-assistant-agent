@@ -152,14 +152,14 @@ The dedicated deployment used for this submission is configured as follows. The 
 
 | Setting | Measured deployment value |
 |---|---|
-| Cloud GPU | AMD Radeon Pro W7900 in Radeon Cloud |
+| Cloud GPU | AMD Radeon Cloud dedicated GPU instance (SKU not surfaced in the user console) |
 | Container image | ROCm vLLM-dev (Navi): ROCm 7.2.1, Ubuntu 22.04, Python 3.10, PyTorch 2.9, vLLM 0.16.0 |
 | Model source | HuggingFace mirror |
 | Served model | `Qwen/Qwen3-14B` |
 | Serve command | `vllm serve Qwen/Qwen3-14B --host 0.0.0.0 --port 8000` |
 | Service interface | Dedicated OpenAI-compatible Radeon Cloud Model API on port 8000, exposed with a `/v1` base URL |
 | Application integration | Work Assistant setup page supplies `AMD_BASE_URL`, `AMD_MODEL`, and a locally stored `AMD_API_KEY` |
-| Persistence choice | Local SSD plus persistent PVC |
+| Persistence choice | Local application storage; a persistent PVC is optional for cloud-side artifacts and was not required for this demo |
 
 The local Work Assistant successfully completed a basic chat request after switching its setup configuration to this dedicated endpoint. The remaining demonstration validates a task-planning or progress-analysis workflow through the same endpoint.
 
@@ -171,23 +171,23 @@ The local Work Assistant successfully completed a basic chat request after switc
 - Keep the application on the OpenAI-compatible API contract so model serving can be changed without business-workflow rewrites.
 - Use server-sent events to stream generated output to the browser instead of waiting for an entire response.
 - Configure request timeouts and cancellation so a user can stop an unnecessary long-running generation.
-- Select a 14B Qwen model that fits within the W7900's 48 GB class of memory while retaining stronger agent reasoning than a smaller smoke-test model.
+- Select a 14B Qwen model to balance agent reasoning quality and serving responsiveness in the deployed Radeon Cloud GPU environment.
 
 This submission reports one deployed configuration and does not claim a before/after optimization gain that was not measured.
 
 ### 6.2 Measured Endpoint Result
 
-The committed result file `bench-results/vllm-benchmark-20260805-121316.json` was generated on 2026-08-05 with one warm-up request followed by three measured, non-streaming requests. Each request used a fixed English prompt, temperature `0`, a 128-token completion cap, and the deployed `Qwen/Qwen3-14B` endpoint.
+The committed result file `bench-results/vllm-benchmark-20260805-170931.json` was generated on 2026-08-05 with three measured, non-streaming requests. Each request used a fixed English prompt, temperature `0`, a 128-token completion cap, and the deployed `Qwen/Qwen3-14B` endpoint.
 
 | Metric | Result |
 |---|---:|
-| Measured requests | 3, after 1 warm-up request |
+| Measured requests | 3 |
 | Prompt tokens per request | 27 |
 | Completion tokens per request | 128 |
-| Average end-to-end latency | 8,884.20 ms |
-| Effective completion rate | 14.41 tokens/s |
-| Per-run latency range | 8,878.24–8,892.05 ms |
-| Per-run effective completion rate | 14.39–14.42 tokens/s |
+| Average end-to-end latency | 9,043.72 ms |
+| Effective completion rate | 14.15 tokens/s |
+| Per-run latency range | 9,042.43-9,044.83 ms |
+| Per-run effective completion rate | 14.15-14.16 tokens/s |
 
 The reported completion rate is completion tokens divided by the full non-streaming HTTP request duration, so it includes connection and request overhead. It is not a separate server-side streaming-token benchmark. Each measured request stopped at the configured 128-token cap (`finish_reason: length`).
 
@@ -228,7 +228,7 @@ Open `http://127.0.0.1:8000`, complete the setup wizard, and provide either the 
 
 ### 7.2 Automated Validation
 
-The current source baseline passes 146 automated tests:
+The current source baseline passes 149 automated tests:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
@@ -236,9 +236,9 @@ The current source baseline passes 146 automated tests:
 
 The test suite covers agent flows, task persistence, settings and secret handling, streaming cancellation, external conversation synchronization, project matching, stable semantic segmentation, incremental analysis, bounded retrieval, hierarchical summaries, workspace operations, and UI/API behavior.
 
-## 8. Demonstration Plan
+## 8. Demonstration Video
 
-The final 3–5 minute demonstration will show:
+The submitted 3-5 minute demonstration shows:
 
 1. Local application startup and setup status.
 2. A developer creating or assessing a project through the browser UI.
@@ -246,6 +246,8 @@ The final 3–5 minute demonstration will show:
 4. Workspace synchronization, incremental analysis, and context recovery from a local AI conversation.
 5. The same application workflow calling the Radeon Cloud/vLLM endpoint.
 6. Radeon GPU runtime evidence and the measured responsiveness of the workflow.
+
+Demo video: [Bilibili - Work Assistant](https://www.bilibili.com/video/BV1weu76jEb2/)
 
 ## 9. Delivery Status
 
@@ -256,9 +258,9 @@ The final 3–5 minute demonstration will show:
 | English Project Specification | Complete; measured deployment data included |
 | Radeon Cloud/vLLM deployment | Complete; local application basic chat verified |
 | AMD GPU optimization measurements | One reproducible endpoint configuration measured; no unmeasured before/after claim |
-| 3–5 minute demo video | Pending |
-| Poster or presentation | Pending |
-| Official Pull Request | Pending |
+| 3–5 minute demo video | [Available on Bilibili](https://www.bilibili.com/video/BV1weu76jEb2/) |
+| Poster | [`output/pdf/work-assistant-track-2-poster.pdf`](output/pdf/work-assistant-track-2-poster.pdf) |
+| Official Pull Request | Pending creation from the official contest fork |
 
 ## 10. Limitations and Responsible Use
 
